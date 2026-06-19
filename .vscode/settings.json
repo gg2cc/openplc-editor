@@ -1,34 +1,41 @@
 {
-  "javascript.validate.enable": false,
-  "search.exclude": {
-    ".git": true,
-    ".eslintcache": true,
-    "configs/dll": true,
-    "release/{build,app/dist}": true,
-    "node_modules": true,
-    "npm-debug.log.*": true,
-    "test/**/__snapshots__": true,
-    "package-lock.json": true,
-    "*.{css,sass,scss}.d.ts": true
-  },
-  "cSpell.words": [
-    "Dropup",
-    "electronmon",
-    "Embla",
-    "headlessui",
-    "hookform",
-    "IFBD",
-    "immer",
-    "IPLC",
-    "ISFC",
-    "mimetypes",
-    "openplc",
-    "oplc",
-    "Pous",
-    "serviceworker",
-    "Shadcn",
-    "tanstack",
-    "titlebar",
-    "toastify"
-  ]
+    "javascript.validate.enable": false,
+    "search.exclude": {
+        ".git": true,
+        ".eslintcache": true,
+        "configs/dll": true,
+        "release/{build,app/dist}": true,
+        "node_modules": true,
+        "npm-debug.log.*": true,
+        "test/**/__snapshots__": true,
+        "package-lock.json": true,
+        "*.{css,sass,scss}.d.ts": true
+    },
+    "cSpell.words": [
+        "Dropup",
+        "electronmon",
+        "Embla",
+        "headlessui",
+        "hookform",
+        "IFBD",
+        "immer",
+        "IPLC",
+        "ISFC",
+        "mimetypes",
+        "openplc",
+        "oplc",
+        "Pous",
+        "serviceworker",
+        "Shadcn",
+        "tanstack",
+        "titlebar",
+        "toastify"
+    ],
+    "ROS2.distro": "foxy",
+    "python.autoComplete.extraPaths": [
+        "/opt/ros/foxy/lib/python3.8/site-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/opt/ros/foxy/lib/python3.8/site-packages"
+    ]
 }
