@@ -11,6 +11,8 @@ import { execSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 
+const GITHUB_PROXY = process.env.GITHUB_PROXY || ''
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -199,7 +201,7 @@ async function downloadXml2st(
   const isWindows = platform === 'win32'
   const isDarwin = platform === 'darwin'
   const ext = isWindows ? 'zip' : 'tar.gz'
-  const url = `https://github.com/${tool.repository}/releases/download/${tool.version}/xml2st-${platform}-${arch}.${ext}`
+  const url = `${GITHUB_PROXY}https://github.com/${tool.repository}/releases/download/${tool.version}/xml2st-${platform}-${arch}.${ext}`
 
   console.log(`  Downloading xml2st ${tool.version} for ${platform}-${arch}...`)
   const tmpDir = fs.mkdtempSync(path.join(RESOURCES_DIR, '.tmp-xml2st-'))
@@ -251,7 +253,7 @@ async function downloadXml2st(
 async function downloadStrucpp(tool: ToolEntry): Promise<void> {
   // The npm tarball is platform-independent (pure TypeScript + C++ headers)
   const version = tool.version.replace(/^v/, '')
-  const url = `https://github.com/${tool.repository}/releases/download/${tool.version}/strucpp-${version}.tgz`
+  const url = `${GITHUB_PROXY}https://github.com/${tool.repository}/releases/download/${tool.version}/strucpp-${version}.tgz`
 
   console.log(`  Downloading strucpp ${tool.version}...`)
   const tmpDir = fs.mkdtempSync(path.join(RESOURCES_DIR, '.tmp-strucpp-'))

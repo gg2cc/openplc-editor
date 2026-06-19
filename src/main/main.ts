@@ -104,7 +104,10 @@ const installExtensions = async () => {
 const createMainWindow = async () => {
   // Check if the application is on debug method, install the extensions
   if (isDebug) {
-    await installExtensions()
+    // await installExtensions()
+    installExtensions().catch((err: unknown) =>
+      logger.error(`Extensions failed (non-critical): ${getErrorMessage(err)}`),
+    ) // Ignore errors during extension installation, as they are non-critical for the app's functionality
   }
   // Create a string with the resources folder path based on app environment;
   const RESOURCES_PATH = app.isPackaged ? join(process.resourcesPath, 'assets') : join(__dirname, '../../assets')
