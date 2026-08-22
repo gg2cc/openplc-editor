@@ -2939,12 +2939,50 @@ class CompilerModule {
           ['--keep-structs'],
         )
       } catch (error) {
-        _mainProcessPort.postMessage({
-          logLevel: 'error',
-          message: `Error transpiling XML to ST: ${error as string}\nStopping debug compilation process.`,
-        })
-        _mainProcessPort.close()
-        return
+        const message = error instanceof Error ? error.message : String(error)
+        if (message.includes('GLIBC_') || message.includes('Failed to load Python shared library')) {
+          _mainProcessPort.postMessage({
+            logLevel: 'warning',
+            message: `Legacy xml2st failed due to system incompatibility (${message.split('\n')[0]}). Falling back to new st-transpiler...`,
+          })
+          try {
+            const ir = fromSchemaShape(projectData as unknown as SchemaProjectData)
+            const result = runJsonTranspiler(ir)
+            if (result.programSt === null || result.errors.length > 0) {
+              const msg = result.errors.join('\n') || 'Failed to generate Structured Text'
+              _mainProcessPort.postMessage({
+                logLevel: 'error',
+                message: `${msg}\nStopping debug compilation process.`,
+              })
+              _mainProcessPort.close()
+              return
+            }
+            for (const warning of result.warnings) {
+              _mainProcessPort.postMessage({ logLevel: 'info', message: warning })
+            }
+            await mkdir(sourceTargetFolderPath, { recursive: true })
+            const programStPath = join(sourceTargetFolderPath, 'program.st')
+            await writeFile(programStPath, result.programSt, 'utf-8')
+            _mainProcessPort.postMessage({ logLevel: 'info', message: `ST file generated at: ${programStPath}` })
+            // Success! Continue with the rest of the function if needed, but wait,
+            // the rest of the function is actually after the catch block?
+            // No, the catch block is for handleTranspileXMLtoST.
+          } catch (stError) {
+            _mainProcessPort.postMessage({
+              logLevel: 'error',
+              message: `Error transpiling JSON to ST (fallback): ${getErrorMessage(stError)}\nStopping debug compilation process.`,
+            })
+            _mainProcessPort.close()
+            return
+          }
+        } else {
+          _mainProcessPort.postMessage({
+            logLevel: 'error',
+            message: `Error transpiling XML to ST: ${message}\nStopping debug compilation process.`,
+          })
+          _mainProcessPort.close()
+          return
+        }
       }
     }
 

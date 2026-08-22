@@ -175,7 +175,7 @@ export function createEditorCompilerPlatformPort(
      * binary), then read `program.st` back from disk.
      */
     async transpileToSt(args: TranspileToStArgs, log: PlatformLog): Promise<TranspileToStResult> {
-      if (isNewTranspilerEnabled()) {
+      const runNewTranspiler = (): TranspileToStResult => {
         try {
           // Editor IPC delivers the schema-shape project data
           // (discriminated-union POUs + singular `configuration`).
@@ -202,6 +202,10 @@ export function createEditorCompilerPlatformPort(
         }
       }
 
+      if (isNewTranspilerEnabled()) {
+        return runNewTranspiler()
+      }
+
       const xmlResult = XmlGenerator(args.projectData as never, 'old-editor')
       if (!xmlResult.ok || !xmlResult.data) {
         log(`XML generation failed: ${xmlResult.message}`, 'error')
@@ -226,6 +230,13 @@ export function createEditorCompilerPlatformPort(
         return { ok: true, programSt }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
+        if (message.includes('GLIBC_') || message.includes('Failed to load Python shared library')) {
+          log(
+            `Legacy xml2st failed due to system incompatibility (${message.split('\n')[0]}). Falling back to new st-transpiler...`,
+            'warning',
+          )
+          return runNewTranspiler()
+        }
         log(`xml2st failed: ${message}`, 'error')
         return { ok: false, errors: [{ message, line: 0, column: 0, severity: 'error' }] }
       }

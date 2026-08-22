@@ -97,7 +97,7 @@ export function createDesktopLibraryBuildPort(deps: DesktopLibraryBuildPortDeps)
       args: TranspileToStArgs,
       log: (message: string, level: 'info' | 'warning' | 'error') => void,
     ): Promise<TranspileToStResult> {
-      if (isNewTranspilerEnabled()) {
+      const runNewTranspiler = (): TranspileToStResult => {
         try {
           // Editor library builds receive the same schema-shape
           // project data as `compileProgram` (see `transpileToSt` on
@@ -120,6 +120,10 @@ export function createDesktopLibraryBuildPort(deps: DesktopLibraryBuildPortDeps)
           log(`transpile-from-json failed: ${message}`, 'error')
           return { ok: false, errors: [{ message, line: 0, column: 0, severity: 'error' }] }
         }
+      }
+
+      if (isNewTranspilerEnabled()) {
+        return runNewTranspiler()
       }
 
       // Legacy path: serialise the project to PLCOpen XML and spawn
@@ -155,6 +159,13 @@ export function createDesktopLibraryBuildPort(deps: DesktopLibraryBuildPortDeps)
         return { ok: true, programSt }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
+        if (message.includes('GLIBC_') || message.includes('Failed to load Python shared library')) {
+          log(
+            `Legacy xml2st failed due to system incompatibility (${message.split('\n')[0]}). Falling back to new st-transpiler...`,
+            'warning',
+          )
+          return runNewTranspiler()
+        }
         log(`xml2st failed: ${message}`, 'error')
         return { ok: false, errors: [{ message, line: 0, column: 0, severity: 'error' }] }
       } finally {
