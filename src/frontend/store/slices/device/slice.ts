@@ -50,13 +50,26 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
     jwtToken: null,
     connectionStatus: 'disconnected',
     plcStatus: null,
+    switchPosition: null,
     ipAddress: null,
+    runtimeVersion: null,
     selectedDevice: null,
     storedCredentials: null,
     timingStats: null,
     includeTimingStatsInPolling: false,
     ethercatStatus: null,
     includeEthercatStatsInPolling: false,
+  },
+  deviceConnection: {
+    status: 'disconnected',
+    port: null,
+    transport: null,
+    debugTransport: null,
+  },
+
+  deviceLicense: {
+    phase: 'idle',
+    report: null,
   },
 
   deviceActions: {
@@ -72,27 +85,12 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
         }),
       )
 
-      // availableBoards drives target-capability resolution, which the
-      // alias registry depends on. This action is the project-load
-      // sync point: the workspace screen calls us once it finishes
-      // board discovery, so by the time we run, the active target's
-      // capabilities resolve correctly. Re-syncing on every subsequent
-      // boards refresh (e.g. VPP package install) catches capability
-      // shifts for the active board.
-      //
-      // We only sync when `availableBoards` was actually provided —
-      // ports-only updates (e.g. board.tsx refresh-ports) don't affect
-      // capabilities and shouldn't churn the alias registry.
-      if (availableBoards) {
-        const syncReport = getState().projectActions.syncVariableAliases()
-        if (syncReport.adopted > 0 || syncReport.refreshed > 0 || syncReport.orphaned > 0) {
-          getState().consoleActions.addLog({
-            id: crypto.randomUUID(),
-            level: 'info',
-            message: `Alias sync: adopted=${syncReport.adopted} refreshed=${syncReport.refreshed} orphaned=${syncReport.orphaned}`,
-          })
-        }
-      }
+      // Board discovery only affects target-capability resolution; it no
+      // longer needs to touch program variables. In the single-field model a
+      // variable's `location` holds either a stable alias name (resolved to an
+      // address at compile time) or a literal address — neither changes when
+      // the board list lands. Producer address recompaction on an actual
+      // target change is handled by `setDeviceBoard → recalculateIecAddresses`.
     },
     setDeviceDefinitions: ({ configuration, pinMapping }): void => {
       setState(
@@ -123,7 +121,7 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
     },
     clearDeviceDefinitions: (): void => {
       setState(
-        produce(({ deviceDefinitions, runtimeConnection }: DeviceSlice) => {
+        produce(({ deviceDefinitions, runtimeConnection, deviceConnection, deviceLicense }: DeviceSlice) => {
           deviceDefinitions.configuration = defaultDeviceConfiguration
           deviceDefinitions.pinMapping = {
             pinsByBoard: {},
@@ -133,12 +131,25 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
           runtimeConnection.connectionStatus = 'disconnected'
           runtimeConnection.plcStatus = null
           runtimeConnection.ipAddress = null
+          runtimeConnection.runtimeVersion = null
           runtimeConnection.selectedDevice = null
           runtimeConnection.storedCredentials = null
           runtimeConnection.timingStats = null
           runtimeConnection.includeTimingStatsInPolling = false
           runtimeConnection.ethercatStatus = null
           runtimeConnection.includeEthercatStatsInPolling = false
+          // The held device link is meaningless once the project is closed —
+          // reset it so a stale connection can't leak into the next one.
+          deviceConnection.status = 'disconnected'
+          deviceConnection.port = null
+          deviceConnection.transport = null
+          deviceConnection.debugTransport = null
+          // Same for licensing, and for a sharper reason: the next project may
+          // select a different board entirely, and a "Licensed" badge carried over
+          // from the previous one would be an assertion about hardware that is not
+          // even connected.
+          deviceLicense.phase = 'idle'
+          deviceLicense.report = null
         }),
       )
     },
@@ -368,8 +379,9 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
       return returnMessage
     },
     setDeviceBoard: (deviceBoard): void => {
+      const previousBoard = getState().deviceDefinitions.configuration.deviceBoard
       setState(
-        produce(({ deviceDefinitions, deviceUpdated }: DeviceSlice) => {
+        produce(({ deviceDefinitions, deviceUpdated, deviceLicense }: DeviceSlice) => {
           deviceUpdated.updated = true
           // Wipe platformOption selections when the board changes — they're
           // declared per-board in the VPP manifest, so a `cpu=atmega328old`
@@ -386,10 +398,34 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
           if (deviceDefinitions.configuration.deviceBoard !== deviceBoard) {
             deviceDefinitions.configuration.selectedPlatformOptions = {}
             deviceDefinitions.pinMapping.currentSelectedPinTableRow = -1
+            // Vendor-screen data is board-specific (a backplane configured for
+            // one target is meaningless on another). Stash the outgoing board's
+            // data into its bucket, then swap the active view to the incoming
+            // board's bucket (empty when it was never configured) — the
+            // previous board's modules are preserved for when the user returns,
+            // and the new board starts clean instead of inheriting stale slots.
+            const cfg = deviceDefinitions.configuration
+            syncActiveBoardVendorBucket(cfg)
+            cfg.vendorScreenData = { ...(cfg.vendorScreenDataByBoard?.[deviceBoard] ?? {}) }
+            // A licence report is board-specific for the same reason all of the
+            // above is: it was verified against the PREVIOUS board's `deviceId`
+            // and its VPP's `productId`. Carried across a switch, the badge
+            // asserts possession for hardware that is no longer selected, and
+            // the buy link gets built from the NEW package id paired with the
+            // OLD device id — binding a purchase to the wrong board.
+            deviceLicense.phase = 'idle'
+            deviceLicense.report = null
           }
           deviceDefinitions.configuration.deviceBoard = deviceBoard
         }),
       )
+      // Switching target changes which producer kinds are active — a board
+      // without pin mapping / VPP frees those addresses. Recompute the
+      // Modbus addresses project-wide so they reclaim the freed space, and
+      // reconcile bound variables. (Skipped when the board is unchanged.)
+      if (previousBoard !== deviceBoard) {
+        getState().projectActions.recalculateIecAddresses()
+      }
     },
     setSelectedPlatformOption: (key, value): void => {
       setState(
@@ -443,10 +479,24 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
         }),
       )
     },
+    setRuntimeVersion: (version): void => {
+      setState(
+        produce(({ runtimeConnection }: DeviceSlice) => {
+          runtimeConnection.runtimeVersion = version
+        }),
+      )
+    },
     setPlcRuntimeStatus: (status): void => {
       setState(
         produce(({ runtimeConnection }: DeviceSlice) => {
           runtimeConnection.plcStatus = status
+        }),
+      )
+    },
+    setPlcSwitchPosition: (position): void => {
+      setState(
+        produce(({ runtimeConnection }: DeviceSlice) => {
+          runtimeConnection.switchPosition = position
         }),
       )
     },
@@ -506,12 +556,57 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
           runtimeConnection.connectionStatus = 'disconnected'
           runtimeConnection.plcStatus = null
           runtimeConnection.ipAddress = null
+          runtimeConnection.runtimeVersion = null
           runtimeConnection.selectedDevice = null
           runtimeConnection.storedCredentials = null
           runtimeConnection.timingStats = null
           runtimeConnection.includeTimingStatsInPolling = false
           runtimeConnection.ethercatStatus = null
           runtimeConnection.includeEthercatStatsInPolling = false
+        }),
+      )
+    },
+    setDeviceConnectionStatus: (status, port, transport, debugTransport): void => {
+      setState(
+        produce(({ deviceConnection }: DeviceSlice) => {
+          deviceConnection.status = status
+          if (port !== undefined) deviceConnection.port = port
+          if (transport !== undefined) deviceConnection.transport = transport
+          if (debugTransport !== undefined) deviceConnection.debugTransport = debugTransport
+        }),
+      )
+    },
+    clearDeviceConnection: (): void => {
+      setState(
+        produce(({ deviceConnection }: DeviceSlice) => {
+          deviceConnection.status = 'disconnected'
+          deviceConnection.port = null
+          deviceConnection.transport = null
+          deviceConnection.debugTransport = null
+        }),
+      )
+    },
+    startDeviceLicenseCheck: (): void => {
+      setState(
+        produce(({ deviceLicense }: DeviceSlice) => {
+          deviceLicense.phase = 'checking'
+          // `report` is deliberately left alone — see the action's docstring.
+        }),
+      )
+    },
+    setDeviceLicenseReport: (report): void => {
+      setState(
+        produce(({ deviceLicense }: DeviceSlice) => {
+          deviceLicense.phase = 'done'
+          deviceLicense.report = report
+        }),
+      )
+    },
+    clearDeviceLicense: (): void => {
+      setState(
+        produce(({ deviceLicense }: DeviceSlice) => {
+          deviceLicense.phase = 'idle'
+          deviceLicense.report = null
         }),
       )
     },
@@ -523,6 +618,7 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
             deviceDefinitions.configuration.vendorScreenData = {}
           }
           deviceDefinitions.configuration.vendorScreenData[persistenceKey] = data
+          syncActiveBoardVendorBucket(deviceDefinitions.configuration)
         }),
       )
     },
@@ -550,21 +646,72 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
               delete target[key]
             }
           }
+          syncActiveBoardVendorBucket(deviceDefinitions.configuration)
         }),
       )
     },
   },
 })
 
+/**
+ * Keep the active board's bucket in `vendorScreenDataByBoard` in lock-step
+ * with the flat `vendorScreenData` view. Called from every vendor-data
+ * mutation so the per-board archive is always current for the active board —
+ * which in turn lets board-switch and save treat the archive as authoritative
+ * without a separate "flush" step.
+ */
+function syncActiveBoardVendorBucket(configuration: DeviceConfiguration): void {
+  if (!configuration.vendorScreenDataByBoard) {
+    configuration.vendorScreenDataByBoard = {}
+  }
+  configuration.vendorScreenDataByBoard[configuration.deviceBoard] = { ...(configuration.vendorScreenData ?? {}) }
+}
+
+/**
+ * Resolve the vendor-screen data for a freshly-loaded project into the
+ * flat-view + per-board-archive pair the store expects.
+ *
+ * - When a project already carries `vendorScreenDataByBoard`, it wins: the
+ *   active view is that board's bucket (falling back to any flat blob), and
+ *   the bucket is ensured present so the active view and archive agree.
+ * - Legacy projects only have the flat `vendorScreenData`. It's attributed to
+ *   the board the project was saved with, so other boards start clean instead
+ *   of inheriting it. Mirrors the `pinsByBoard` migration.
+ */
+function migrateVendorScreenData(
+  provided: Partial<DeviceConfiguration>,
+  deviceBoard: string,
+): Pick<DeviceConfiguration, 'vendorScreenData' | 'vendorScreenDataByBoard'> {
+  const flat = provided.vendorScreenData
+  const archive = provided.vendorScreenDataByBoard
+
+  if (archive && Object.keys(archive).length > 0) {
+    const active = archive[deviceBoard] ?? flat
+    return {
+      vendorScreenData: active,
+      vendorScreenDataByBoard: active !== undefined ? { ...archive, [deviceBoard]: active } : { ...archive },
+    }
+  }
+
+  if (flat !== undefined) {
+    return { vendorScreenData: flat, vendorScreenDataByBoard: { [deviceBoard]: flat } }
+  }
+
+  return { vendorScreenData: undefined, vendorScreenDataByBoard: undefined }
+}
+
 function mergeDeviceConfigWithDefaults(
   provided: Partial<DeviceConfiguration>,
   defaults: DeviceConfiguration,
 ): DeviceConfiguration {
+  const deviceBoard = provided.deviceBoard || defaults.deviceBoard
+  const { vendorScreenData, vendorScreenDataByBoard } = migrateVendorScreenData(provided, deviceBoard)
   return {
-    deviceBoard: provided.deviceBoard || defaults.deviceBoard,
+    deviceBoard,
     communicationPort: provided.communicationPort ?? defaults.communicationPort,
     runtimeIpAddress: provided.runtimeIpAddress ?? defaults.runtimeIpAddress,
-    vendorScreenData: provided.vendorScreenData ?? defaults.vendorScreenData,
+    vendorScreenData,
+    vendorScreenDataByBoard,
     // Must merge — otherwise loading a project whose configuration.json
     // predates platformOptions leaves the field undefined in the store, and
     // every selector falling back to `?? {}` returns a fresh literal that

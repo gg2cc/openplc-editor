@@ -1,4 +1,7 @@
+import { modbusMemoryKey, vppMemoryKey } from '@root/middleware/shared/utils/iec-address/registry'
 import { createStore } from 'zustand/vanilla'
+
+import type { ConfiguredEtherCATDevice } from '@root/middleware/shared/ports/esi-types'
 
 import type {
   BoardInfo,
@@ -18,6 +21,7 @@ import type {
   S7CommDataBlock,
 } from '../../../middleware/shared/ports/types'
 import { generateIecVariablesToString } from '../../utils/generate-iec-variables-to-string'
+import { serializeDataTypeToText } from '../../utils/PLC/data-type-serializer'
 import { createConsoleSlice } from '../slices/console'
 import { createDeviceSlice } from '../slices/device'
 import { createEditorSlice } from '../slices/editor'
@@ -43,6 +47,19 @@ function makeStore() {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function openDatatypeInCodeMode(store: ReturnType<typeof makeStore>, name: string, code: string) {
+  store.getState().editorActions.addModel({
+    type: 'plc-datatype',
+    meta: { name, derivation: 'enumerated' },
+    structure: { display: 'code', code },
+  })
+}
+
+function codeOf(store: ReturnType<typeof makeStore>, name: string): string | undefined {
+  const model = store.getState().editors.find((e) => e.meta.name === name)
+  return model?.type === 'plc-datatype' && model.structure.display === 'code' ? model.structure.code : undefined
+}
 
 function makeVariable(name: string, cls: PLCVariable['class'] = 'local'): PLCVariable {
   return {
@@ -249,6 +266,28 @@ function seedRemoteDevice(store: ReturnType<typeof makeStore>, device: PLCRemote
   })
 }
 
+/** Seed global variables directly (bypassing createVariable's dedup so the
+ *  `location` binding is stored verbatim for alias-cascade / compile tests). */
+function seedGlobals(store: ReturnType<typeof makeStore>, vars: PLCVariable[]) {
+  const current = store.getState().project
+  store.getState().projectActions.setProject({
+    ...current,
+    data: {
+      ...current.data,
+      configurations: {
+        ...current.data.configurations,
+        resource: { ...current.data.configurations.resource, globalVariables: vars },
+      },
+    },
+  })
+}
+
+/** A BOOL variable whose `location` is set verbatim — an alias name, a literal
+ *  `%addr`, or empty — for the single-field location model. */
+function locVar(name: string, location: string, cls: PLCVariable['class'] = 'local'): PLCVariable {
+  return { name, class: cls, type: { definition: 'base-type', value: 'BOOL' }, location, documentation: '' }
+}
+
 /** Seed a Runtime v4 target so the cap-gated address pool counts
  *  Modbus claims. Producer-edit actions (addIOGroup, updateIOGroup …)
  *  rely on `caps.modbusTcpRemote = true` to count sibling groups when
@@ -283,6 +322,40 @@ function seedRuntimeV4Board(store: ReturnType<typeof makeStore>) {
     ]),
   })
   store.getState().deviceActions.setDeviceBoard('OpenPLC Runtime v4')
+}
+
+/** Seed a target that exposes pin mapping AND VPP I/O (plus Modbus), so the
+ *  central recalculation reallocates VPP + Modbus. */
+function seedVppBoard(store: ReturnType<typeof makeStore>) {
+  store.getState().deviceActions.setAvailableOptions({
+    availableBoards: new Map<string, BoardInfo>([
+      [
+        'VPP Board',
+        {
+          compiler: 'openplc-compiler',
+          core: 'rt-v4',
+          preview: '',
+          specs: {},
+          capabilities: {
+            pinMapping: true,
+            vppIo: true,
+            modbusTcpRemote: true,
+            ethercat: true,
+            modbusTcpServer: true,
+            opcuaServer: true,
+            s7Server: true,
+            debuggerTransports: ['websocket'],
+            pythonFunctionBlocks: true,
+            arduinoApiCompletions: false,
+            hasRuntimeStats: true,
+            isInProcessSimulator: false,
+            directUsbUpload: false,
+          },
+        },
+      ],
+    ]),
+  })
+  store.getState().deviceActions.setDeviceBoard('VPP Board')
 }
 
 // ===========================================================================
@@ -783,30 +856,82 @@ describe('createProjectSlice', () => {
       expect(result.ok).toBe(false)
     })
 
-    it('clearing the location drops a stale alias', () => {
-      // Reproduces the orphaned-alias case: a variable that carries a
-      // location plus an alias no longer backed by any producer (target
-      // changed / device removed). Clearing the location (location: '')
-      // must succeed AND drop the stale alias.
+    it('syncs a VAR_EXTERNAL debug toggle to the global and every other reference', () => {
+      // One global, referenced via VAR_EXTERNAL from a program and an FB.
+      seedGlobals(store, [makeVariable('test_global', 'global')])
+      seedPou(store, makePou('Main', 'program', [makeVariable('test_global', 'external')]))
+      seedPou(store, makePou('Mover', 'function-block', [makeVariable('test_global', 'external')]))
+
+      store.getState().projectActions.updateVariable({
+        scope: 'local',
+        associatedPou: 'Main',
+        variableId: 'test_global',
+        data: { debug: true },
+      })
+
+      const st = store.getState().project
+      expect(st.data.configurations.resource.globalVariables[0].debug).toBe(true)
+      for (const pou of st.data.pous) {
+        expect(pou.interface?.variables[0].debug).toBe(true)
+      }
+    })
+
+    it('syncs a global debug toggle down to every VAR_EXTERNAL reference (case-insensitive)', () => {
+      seedGlobals(store, [makeVariable('Test_Global', 'global')])
+      seedPou(store, makePou('Main', 'program', [makeVariable('TEST_GLOBAL', 'external')]))
+
+      store.getState().projectActions.updateVariable({
+        scope: 'global',
+        variableId: 'Test_Global',
+        data: { debug: true },
+      })
+
+      const st = store.getState().project
+      expect(st.data.configurations.resource.globalVariables[0].debug).toBe(true)
+      expect(st.data.pous[0].interface?.variables[0].debug).toBe(true)
+    })
+
+    it('does not propagate a local (non-external) debug toggle to a same-named global', () => {
+      seedGlobals(store, [makeVariable('x', 'global')])
+      seedPou(store, makePou('Main', 'program', [makeVariable('x', 'local')]))
+
+      store.getState().projectActions.updateVariable({
+        scope: 'local',
+        associatedPou: 'Main',
+        variableId: 'x',
+        data: { debug: true },
+      })
+
+      const st = store.getState().project
+      expect(st.data.pous[0].interface?.variables[0].debug).toBe(true)
+      // The unrelated same-named global must stay untouched.
+      expect(st.data.configurations.resource.globalVariables[0].debug).toBeFalsy()
+    })
+
+    it('stores the location binding verbatim (alias name or literal) and never auto-adopts', () => {
+      // Single-field model: `location` is the binding. A manual literal is
+      // stored verbatim; an alias name is stored verbatim (NOT auto-resolved
+      // to an address, NOT auto-adopted from a matching address); clearing
+      // succeeds.
       store.getState().projectActions.createVariable({ scope: 'global', data: makeVariable('gx', 'global') })
+
       store.getState().projectActions.updateVariable({ scope: 'global', variableId: 'gx', data: { location: '%QW0' } })
-      // Attach a stale alias (no producer declares it).
+      expect(store.getState().project.data.configurations.resource.globalVariables[0].location).toBe('%QW0')
+
+      // Bind by alias name — kept verbatim.
       store
         .getState()
-        .projectActions.updateVariable({ scope: 'global', variableId: 'gx', data: { alias: 'StaleAlias' } })
-      let v = store.getState().project.data.configurations.resource.globalVariables[0]
-      expect(v.location).toBe('%QW0')
-      expect(v.alias).toBe('StaleAlias')
+        .projectActions.updateVariable({ scope: 'global', variableId: 'gx', data: { location: 'push_button' } })
+      expect(store.getState().project.data.configurations.resource.globalVariables[0].location).toBe('push_button')
 
+      // Clearing the location.
       const result = store.getState().projectActions.updateVariable({
         scope: 'global',
         variableId: 'gx',
         data: { location: '' },
       })
       expect(result.ok).toBe(true)
-      v = store.getState().project.data.configurations.resource.globalVariables[0]
-      expect(v.location).toBe('')
-      expect(v.alias ?? '').toBe('')
+      expect(store.getState().project.data.configurations.resource.globalVariables[0].location).toBe('')
     })
   })
 
@@ -1018,11 +1143,175 @@ describe('createProjectSlice', () => {
       expect(store.getState().project.data.dataTypes).toHaveLength(0)
     })
 
+    it('queues the datatypes/<name>.dt path for deletion', () => {
+      const dt: PLCDataType = { name: 'MyStruct', derivation: 'structure', variable: [] }
+      store.getState().projectActions.createDatatype({ data: dt })
+      store.getState().projectActions.deleteDatatype('MyStruct')
+      expect(store.getState().pendingDeletions).toContain('datatypes/MyStruct.dt')
+    })
+
     it('does nothing when data type not found', () => {
       const dt: PLCDataType = { name: 'A', derivation: 'structure', variable: [] }
       store.getState().projectActions.createDatatype({ data: dt })
       store.getState().projectActions.deleteDatatype('NonExistent')
       expect(store.getState().project.data.dataTypes).toHaveLength(1)
+    })
+  })
+
+  describe('updateDatatypeName', () => {
+    it('renames the data type and queues the old .dt path for deletion', () => {
+      const dt: PLCDataType = { name: 'OldName', derivation: 'structure', variable: [] }
+      store.getState().projectActions.createDatatype({ data: dt })
+      store.getState().projectActions.updateDatatypeName('OldName', 'NewName')
+      expect(store.getState().project.data.dataTypes[0].name).toBe('NewName')
+      expect(store.getState().pendingDeletions).toContain('datatypes/OldName.dt')
+    })
+
+    it('does nothing when the data type is not found', () => {
+      store.getState().projectActions.updateDatatypeName('Ghost', 'NewName')
+      expect(store.getState().project.data.dataTypes).toHaveLength(0)
+      expect(store.getState().pendingDeletions).toHaveLength(0)
+    })
+  })
+
+  describe('propagateDatatypeRename', () => {
+    const directRef = (name: string, typeName: string): PLCVariable => ({
+      name,
+      class: 'local',
+      type: { definition: 'user-data-type', value: typeName },
+      location: '',
+      documentation: '',
+    })
+    const arrayRef = (name: string, typeName: string): PLCVariable => ({
+      name,
+      class: 'local',
+      type: {
+        definition: 'array',
+        value: `ARRAY [0..4] OF ${typeName}`,
+        data: {
+          baseType: { definition: 'user-data-type', value: typeName },
+          dimensions: [{ dimension: '0..4' }],
+        },
+      },
+      location: '',
+      documentation: '',
+    })
+
+    beforeEach(() => {
+      store.getState().projectActions.createPou({
+        type: 'program',
+        data: {
+          language: 'st',
+          name: 'Main',
+          variables: [directRef('motor', 'MotorDef'), arrayRef('motors', 'motordef'), makeVariable('plain')],
+          body: makeBody(),
+          documentation: '',
+        },
+      })
+      store.getState().projectActions.setGlobalVariables({
+        variables: [{ ...directRef('gMotor', 'MotorDef'), class: 'global' }, makeVariable('gPlain', 'global')],
+      })
+      store.getState().projectActions.createDatatype({
+        data: {
+          name: 'MotorDef',
+          derivation: 'structure',
+          variable: [{ name: 'speed', type: { definition: 'base-type', value: 'INT' } }],
+        },
+      })
+      store.getState().projectActions.createDatatype({
+        data: {
+          name: 'Chassis',
+          derivation: 'structure',
+          variable: [
+            { name: 'front', type: { definition: 'user-data-type', value: 'MotorDef' } },
+            { name: 'id', type: { definition: 'base-type', value: 'INT' } },
+          ],
+        },
+      })
+      store.getState().projectActions.createDatatype({
+        data: {
+          name: 'MotorBank',
+          derivation: 'array',
+          baseType: { definition: 'user-data-type', value: 'MotorDef' },
+          initialValue: '',
+          dimensions: [{ dimension: '1..8' }],
+        },
+      })
+    })
+
+    it('rewrites direct and array POU variable references (case-insensitive)', () => {
+      store.getState().projectActions.propagateDatatypeRename('MotorDef', 'DriveDef')
+
+      const variables = store.getState().project.data.pous[0].interface?.variables ?? []
+      expect(variables[0].type).toEqual({ definition: 'user-data-type', value: 'DriveDef' })
+      expect(variables[1].type).toEqual({
+        definition: 'array',
+        value: 'ARRAY [0..4] OF DriveDef',
+        data: {
+          baseType: { definition: 'user-data-type', value: 'DriveDef' },
+          dimensions: [{ dimension: '0..4' }],
+        },
+      })
+      expect(variables[2].type).toEqual({ definition: 'base-type', value: 'INT' })
+    })
+
+    it('rewrites global variable references', () => {
+      store.getState().projectActions.propagateDatatypeRename('MotorDef', 'DriveDef')
+
+      const globals = store.getState().project.data.configurations.resource.globalVariables
+      expect(globals[0].type).toEqual({ definition: 'user-data-type', value: 'DriveDef' })
+      expect(globals[1].type).toEqual({ definition: 'base-type', value: 'INT' })
+    })
+
+    it('rewrites other data types and leaves the renamed type entry itself alone', () => {
+      store.getState().projectActions.propagateDatatypeRename('MotorDef', 'DriveDef')
+
+      const dataTypes = store.getState().project.data.dataTypes
+      // The type's own entry is updateDatatypeName's job.
+      expect(dataTypes[0].name).toBe('MotorDef')
+      expect(dataTypes[1]).toEqual({
+        name: 'Chassis',
+        derivation: 'structure',
+        variable: [
+          { name: 'front', type: { definition: 'user-data-type', value: 'DriveDef' } },
+          { name: 'id', type: { definition: 'base-type', value: 'INT' } },
+        ],
+      })
+      expect(dataTypes[2]).toEqual({
+        name: 'MotorBank',
+        derivation: 'array',
+        baseType: { definition: 'user-data-type', value: 'DriveDef' },
+        initialValue: '',
+        dimensions: [{ dimension: '1..8' }],
+      })
+    })
+
+    it('is a no-op when nothing references the type', () => {
+      const before = store.getState().project
+      store.getState().projectActions.propagateDatatypeRename('Ghost', 'Phantom')
+      const after = store.getState().project
+
+      expect(after.data.pous).toEqual(before.data.pous)
+      expect(after.data.configurations.resource.globalVariables).toEqual(
+        before.data.configurations.resource.globalVariables,
+      )
+      expect(after.data.dataTypes).toEqual(before.data.dataTypes)
+    })
+  })
+
+  describe('setUnparsedDataTypeFiles', () => {
+    it('replaces the stashed raw .dt files', () => {
+      const raw = [{ relativePath: 'datatypes/Broken.dt', content: 'TYPE garbage' }]
+      store.getState().projectActions.setUnparsedDataTypeFiles(raw)
+      expect(store.getState().unparsedDataTypeFiles).toEqual(raw)
+      store.getState().projectActions.setUnparsedDataTypeFiles([])
+      expect(store.getState().unparsedDataTypeFiles).toEqual([])
+    })
+
+    it('is reset by clearProjects', () => {
+      store.getState().projectActions.setUnparsedDataTypeFiles([{ relativePath: 'datatypes/X.dt', content: 'x' }])
+      store.getState().projectActions.clearProjects()
+      expect(store.getState().unparsedDataTypeFiles).toEqual([])
     })
   })
 
@@ -1157,6 +1446,104 @@ describe('createProjectSlice', () => {
       const replacement: PLCDataType = { name: 'Z', derivation: 'structure', variable: [] }
       store.getState().projectActions.applyDatatypeSnapshot('NonExistent', replacement)
       expect(store.getState().project.data.dataTypes[0].name).toBe('A')
+    })
+
+    it('regenerates the code buffer of a type shown in code mode', () => {
+      const dt: PLCDataType = { name: 'A', derivation: 'enumerated', values: [{ description: 'RED' }] }
+      store.getState().projectActions.createDatatype({ data: dt })
+      openDatatypeInCodeMode(store, 'A', 'stale text')
+
+      store.getState().projectActions.applyDatatypeSnapshot('A', {
+        name: 'A',
+        derivation: 'enumerated',
+        values: [{ description: 'BLUE' }],
+      })
+
+      expect(codeOf(store, 'A')).toContain('BLUE')
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Data-type code view
+  // -------------------------------------------------------------------------
+  describe('reconcileDatatypeText', () => {
+    const enumType: PLCDataType = { name: 'Colors', derivation: 'enumerated', values: [{ description: 'RED' }] }
+
+    it('is a no-op when the type is not shown in code mode', () => {
+      store.getState().projectActions.createDatatype({ data: enumType })
+      expect(store.getState().projectActions.reconcileDatatypeText('Colors').ok).toBe(true)
+      expect(store.getState().project.data.dataTypes[0]).toEqual(enumType)
+    })
+
+    it('is a no-op when the buffer still matches the serialized type', () => {
+      store.getState().projectActions.createDatatype({ data: enumType })
+      openDatatypeInCodeMode(store, 'Colors', serializeDataTypeToText(enumType))
+
+      expect(store.getState().projectActions.reconcileDatatypeText('Colors').ok).toBe(true)
+      expect(store.getState().project.data.dataTypes[0]).toEqual(enumType)
+    })
+
+    it('is a no-op when the type no longer exists', () => {
+      openDatatypeInCodeMode(store, 'Ghost', 'TYPE\nGhost : (RED);\nEND_TYPE\n')
+      expect(store.getState().projectActions.reconcileDatatypeText('Ghost').ok).toBe(true)
+      expect(store.getState().project.data.dataTypes).toHaveLength(0)
+    })
+
+    it('folds a diverged buffer back into the type', () => {
+      store.getState().projectActions.createDatatype({ data: enumType })
+      openDatatypeInCodeMode(store, 'Colors', 'TYPE\nColors : (RED, GREEN);\nEND_TYPE\n')
+
+      expect(store.getState().projectActions.reconcileDatatypeText('Colors').ok).toBe(true)
+      const updated = store.getState().project.data.dataTypes[0]
+      expect(updated.derivation === 'enumerated' && updated.values).toEqual([
+        { description: 'RED' },
+        { description: 'GREEN' },
+      ])
+    })
+
+    it('refuses when the buffer does not parse', () => {
+      store.getState().projectActions.createDatatype({ data: enumType })
+      openDatatypeInCodeMode(store, 'Colors', 'TYPE\nnot a declaration\nEND_TYPE\n')
+
+      const response = store.getState().projectActions.reconcileDatatypeText('Colors')
+      expect(response.ok).toBe(false)
+      expect(response.title).toBe('Data type text is invalid')
+      expect(store.getState().project.data.dataTypes[0]).toEqual(enumType)
+    })
+  })
+
+  describe('regenerateDatatypeText', () => {
+    it('re-serializes the type into its buffer', () => {
+      const dt: PLCDataType = { name: 'Colors', derivation: 'enumerated', values: [{ description: 'RED' }] }
+      store.getState().projectActions.createDatatype({ data: dt })
+      openDatatypeInCodeMode(store, 'Colors', 'stale text')
+
+      store.getState().projectActions.regenerateDatatypeText('Colors')
+      expect(codeOf(store, 'Colors')).toBe(serializeDataTypeToText(dt))
+    })
+
+    it('does nothing when the type is not shown in code mode', () => {
+      const dt: PLCDataType = { name: 'Colors', derivation: 'enumerated', values: [{ description: 'RED' }] }
+      store.getState().projectActions.createDatatype({ data: dt })
+      store.getState().projectActions.regenerateDatatypeText('Colors')
+      expect(store.getState().editors).toHaveLength(0)
+    })
+
+    it('does nothing when the type no longer exists', () => {
+      openDatatypeInCodeMode(store, 'Ghost', 'raw')
+      store.getState().projectActions.regenerateDatatypeText('Ghost')
+      expect(codeOf(store, 'Ghost')).toBe('raw')
+    })
+  })
+
+  describe('removeUnparsedDataTypeFile', () => {
+    it('drops only the matching path', () => {
+      store.getState().projectActions.setUnparsedDataTypeFiles([
+        { relativePath: 'datatypes/A.dt', content: 'a' },
+        { relativePath: 'datatypes/B.dt', content: 'b' },
+      ])
+      store.getState().projectActions.removeUnparsedDataTypeFile('datatypes/A.dt')
+      expect(store.getState().unparsedDataTypeFiles).toEqual([{ relativePath: 'datatypes/B.dt', content: 'b' }])
     })
   })
 
@@ -1991,6 +2378,50 @@ describe('createProjectSlice', () => {
       expect(result.ok).toBe(true)
       expect(store.getState().project.data.remoteDevices![0].ethercatConfig).toEqual(cfg)
     })
+
+    it('reallocates EtherCAT channel addresses through the central registry', () => {
+      seedRuntimeV4Board(store)
+      seedRemoteDevice(store, { name: 'BusA', protocol: 'ethercat' })
+      const cfg = {
+        masterConfig: { networkInterface: 'eth0', cycleTimeUs: 1000, taskPriority: 50 },
+        devices: [
+          {
+            id: 's1',
+            name: 'Slave1',
+            channelMappings: [
+              { channelId: 'c0', iecLocation: '%IW5', alias: '' },
+              { channelId: 'c1', iecLocation: '%IW6', alias: '' },
+            ],
+          } as unknown as ConfiguredEtherCATDevice,
+        ],
+      }
+      store.getState().projectActions.updateEthercatConfig('BusA', cfg)
+      // The central registry compacts the channels to the lowest free %IW slots.
+      const mappings = store.getState().project.data.remoteDevices![0].ethercatConfig!.devices[0].channelMappings
+      expect(mappings.map((m) => m.iecLocation)).toEqual(['%IW0', '%IW1'])
+    })
+
+    it('cascades a channel alias rename onto bound variable locations', () => {
+      seedRuntimeV4Board(store)
+      seedRemoteDevice(store, { name: 'BusA', protocol: 'ethercat' })
+      const withAlias = (alias: string) => ({
+        masterConfig: { networkInterface: 'eth0', cycleTimeUs: 1000, taskPriority: 50 },
+        devices: [
+          {
+            id: 's1',
+            name: 'Slave1',
+            channelMappings: [{ channelId: 'c0', iecLocation: '%IW0', alias }],
+          } as unknown as ConfiguredEtherCATDevice,
+        ],
+      })
+      // First write establishes the channel alias `ec_in`.
+      store.getState().projectActions.updateEthercatConfig('BusA', withAlias('ec_in'))
+      // A program variable binds to that alias by name.
+      seedPou(store, makePou('Prog', 'program', [locVar('reading', 'ec_in')]))
+      // Rewriting the config with a renamed alias must cascade onto the binding.
+      store.getState().projectActions.updateEthercatConfig('BusA', withAlias('ec_input'))
+      expect(store.getState().project.data.pous[0].interface!.variables![0].location).toBe('ec_input')
+    })
   })
 
   describe('createRemoteDevice', () => {
@@ -2273,8 +2704,8 @@ describe('createProjectSlice', () => {
       expect(groups[1].ioPoints![1].iecLocation).toBe('%IW3')
     })
 
-    it('skips bit addresses that are already used (bit-based collision with gaps)', () => {
-      // Create a device with pre-existing bit addresses that have gaps
+    it('recompacts bit addresses project-wide, closing a pre-existing gap', () => {
+      // A pre-existing group carries a manual gap (%IX0.0 then %IX0.2).
       const device = makeRemoteDevice('Dev1')
       device.modbusTcpConfig!.ioGroups = [
         {
@@ -2287,18 +2718,19 @@ describe('createProjectSlice', () => {
           errorHandling: 'keep-last-value',
           ioPoints: [
             { id: 'p0', name: 'p0', type: 'Digital Input (Coil Status)', iecLocation: '%IX0.0', alias: '' },
-            // Skip %IX0.1 (gap) and use %IX0.2
             { id: 'p1', name: 'p1', type: 'Digital Input (Coil Status)', iecLocation: '%IX0.2', alias: '' },
           ],
         },
       ]
       seedRemoteDevice(store, device)
 
-      // Add a new group; the generator should skip %IX0.0 (used), use %IX0.1 (free), skip %IX0.2 (used), use %IX0.3
+      // Adding a group triggers the central recalculation: the whole Modbus
+      // space re-packs, so the pre-existing group closes its gap
+      // (%IX0.0/%IX0.1) and the new group packs right after (%IX0.2/%IX0.3).
       store.getState().projectActions.addIOGroup('Dev1', makeIOGroup('g2', '1', 2))
       const groups = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups
-      expect(groups[1].ioPoints![0].iecLocation).toBe('%IX0.1')
-      expect(groups[1].ioPoints![1].iecLocation).toBe('%IX0.3')
+      expect(groups[0].ioPoints!.map((p) => p.iecLocation)).toEqual(['%IX0.0', '%IX0.1'])
+      expect(groups[1].ioPoints!.map((p) => p.iecLocation)).toEqual(['%IX0.2', '%IX0.3'])
     })
 
     it('ignores VPP claims on a target whose caps do not include vppIo', () => {
@@ -2386,6 +2818,60 @@ describe('createProjectSlice', () => {
       const result = store.getState().projectActions.updateIOGroup('EtherCAT', 'g1', { name: 'x' })
       expect(result.ok).toBe(true)
     })
+
+    it('regenerates ioPoints when the length grows (edit size)', () => {
+      seedRemoteDevice(store, makeRemoteDevice('Dev1'))
+      store.getState().projectActions.addIOGroup('Dev1', makeIOGroup('g1', '3', 2))
+      expect(store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups[0].ioPoints).toHaveLength(2)
+
+      store.getState().projectActions.updateIOGroup('Dev1', 'g1', { length: 4 })
+      const points = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups[0].ioPoints!
+      expect(points).toHaveLength(4)
+      expect(points.map((p) => p.iecLocation)).toEqual(['%IW0', '%IW1', '%IW2', '%IW3'])
+    })
+
+    it('regenerates ioPoints when the length shrinks (edit size)', () => {
+      seedRemoteDevice(store, makeRemoteDevice('Dev1'))
+      store.getState().projectActions.addIOGroup('Dev1', makeIOGroup('g1', '3', 4))
+      store.getState().projectActions.updateIOGroup('Dev1', 'g1', { length: 1 })
+      const points = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups[0].ioPoints!
+      expect(points).toHaveLength(1)
+      expect(points[0].iecLocation).toBe('%IW0')
+    })
+
+    it('re-derives addresses under the new prefix when the function code changes', () => {
+      seedRemoteDevice(store, makeRemoteDevice('Dev1'))
+      store.getState().projectActions.addIOGroup('Dev1', makeIOGroup('g1', '3', 2)) // FC3 -> %IW
+      store.getState().projectActions.updateIOGroup('Dev1', 'g1', { functionCode: '1' }) // FC1 -> %IX
+      const points = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups[0].ioPoints!
+      expect(points.map((p) => p.iecLocation)).toEqual(['%IX0.0', '%IX0.1'])
+    })
+
+    it('recompacts sibling groups project-wide after an edit (central registry)', () => {
+      seedRemoteDevice(store, makeRemoteDevice('Dev1'))
+      store.getState().projectActions.addIOGroup('Dev1', makeIOGroup('g1', '3', 2)) // %IW0,1
+      store.getState().projectActions.addIOGroup('Dev1', makeIOGroup('g2', '3', 2)) // %IW2,3
+
+      // Grow g1 to 3 points. The central recalculation re-packs the whole
+      // Modbus space in group order: g1 → %IW0/1/2, g2 slides to %IW3/4.
+      store.getState().projectActions.updateIOGroup('Dev1', 'g1', { length: 3 })
+      const groups = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups
+      expect(groups[0].ioPoints!.map((p) => p.iecLocation)).toEqual(['%IW0', '%IW1', '%IW2'])
+      expect(groups[1].ioPoints!.map((p) => p.iecLocation)).toEqual(['%IW3', '%IW4'])
+    })
+
+    it('preserves point aliases positionally when regenerating', () => {
+      seedRemoteDevice(store, makeRemoteDevice('Dev1'))
+      store.getState().projectActions.addIOGroup('Dev1', makeIOGroup('g1', '3', 2))
+      const pointId = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups[0].ioPoints![0].id
+      store.getState().projectActions.updateIOPointAlias('Dev1', 'g1', pointId, 'Temp')
+
+      store.getState().projectActions.updateIOGroup('Dev1', 'g1', { length: 3 })
+      const points = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups[0].ioPoints!
+      expect(points).toHaveLength(3)
+      expect(points[0].alias).toBe('Temp') // survived the reshuffle
+      expect(points[2].alias).toBe('') // freshly allocated slot
+    })
   })
 
   describe('deleteIOGroup', () => {
@@ -2407,6 +2893,128 @@ describe('createProjectSlice', () => {
       seedRemoteDevice(store, { name: 'EtherCAT', protocol: 'ethercat' })
       const result = store.getState().projectActions.deleteIOGroup('EtherCAT', 'g1')
       expect(result.ok).toBe(true)
+    })
+
+    it('recompacts the surviving groups into the freed slots (bug #4)', () => {
+      seedRemoteDevice(store, makeRemoteDevice('Dev1'))
+      store.getState().projectActions.addIOGroup('Dev1', makeIOGroup('g1', '3', 2)) // %IW0,1
+      store.getState().projectActions.addIOGroup('Dev1', makeIOGroup('g2', '3', 2)) // %IW2,3
+      store.getState().projectActions.deleteIOGroup('Dev1', 'g1')
+      const groups = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups
+      expect(groups).toHaveLength(1)
+      // g2 slides down into the freed slots — no gap left behind.
+      expect(groups[0].ioPoints!.map((p) => p.iecLocation)).toEqual(['%IW0', '%IW1'])
+    })
+  })
+
+  describe('recalculateIecAddresses (central registry)', () => {
+    beforeEach(() => {
+      seedRuntimeV4Board(store)
+    })
+
+    it('recompacts across devices when a whole device is removed', () => {
+      seedRemoteDevice(store, makeRemoteDevice('A'))
+      seedRemoteDevice(store, makeRemoteDevice('B'))
+      store.getState().projectActions.addIOGroup('A', makeIOGroup('ga', '3', 2)) // %IW0,1
+      store.getState().projectActions.addIOGroup('B', makeIOGroup('gb', '3', 2)) // %IW2,3
+      store.getState().projectActions.deleteRemoteDevice('A')
+      const devices = store.getState().project.data.remoteDevices!
+      expect(devices).toHaveLength(1)
+      // B's group reclaims device A's freed addresses project-wide.
+      expect(devices[0].modbusTcpConfig!.ioGroups[0].ioPoints!.map((p) => p.iecLocation)).toEqual(['%IW0', '%IW1'])
+    })
+
+    it('is a benign no-op with no remote devices', () => {
+      const result = store.getState().projectActions.recalculateIecAddresses()
+      expect(result.ok).toBe(true)
+    })
+
+    it('activates pin-mapping / VPP kinds when the target supports them', () => {
+      // A board that exposes pin mapping AND VPP I/O — exercises those
+      // capability branches. Modbus still allocates around them.
+      seedVppBoard(store)
+      seedRemoteDevice(store, makeRemoteDevice('Dev1'))
+      store.getState().projectActions.addIOGroup('Dev1', makeIOGroup('g1', '3', 2))
+      const points = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups[0].ioPoints!
+      expect(points.map((p) => p.iecLocation)).toEqual(['%IW0', '%IW1'])
+    })
+
+    it('reallocates and writes back VPP io-mapping entries (compacting a gap)', () => {
+      seedVppBoard(store)
+      // A VPP entry sitting at %QX0.5 with a manual gap below it.
+      store.getState().deviceActions.setVendorScreenData('io-mapping', {
+        entries: [
+          {
+            slot: 1,
+            channelName: 'DO1',
+            channelType: 'coil',
+            dataType: 'BOOL',
+            moduleId: 'mod-a',
+            iecAddress: '%QX0.5',
+            alias: '',
+          },
+          // An unparseable address is skipped by the migration → left verbatim.
+          {
+            slot: 1,
+            channelName: 'BAD',
+            channelType: 'coil',
+            dataType: 'BOOL',
+            moduleId: 'mod-a',
+            iecAddress: 'NOPE',
+            alias: '',
+          },
+        ],
+      })
+      store.getState().projectActions.recalculateIecAddresses()
+      const entries = (
+        store.getState().deviceDefinitions.configuration.vendorScreenData!['io-mapping'] as {
+          entries: Array<{ iecAddress: string }>
+        }
+      ).entries
+      // The valid VPP channel compacts to the lowest free %QX slot; the
+      // unmapped entry is returned unchanged.
+      expect(entries[0].iecAddress).toBe('%QX0.0')
+      expect(entries[1].iecAddress).toBe('NOPE')
+    })
+
+    it('skips devices without a Modbus config during writeback', () => {
+      seedRemoteDevice(store, { name: 'EtherCAT', protocol: 'ethercat' })
+      seedRemoteDevice(store, makeRemoteDevice('Dev1'))
+      store.getState().projectActions.addIOGroup('Dev1', makeIOGroup('g1', '3', 1))
+      const result = store.getState().projectActions.recalculateIecAddresses()
+      expect(result.ok).toBe(true)
+      expect(
+        store.getState().project.data.remoteDevices![1].modbusTcpConfig!.ioGroups[0].ioPoints![0].iecLocation,
+      ).toBe('%IW0')
+    })
+
+    it('restores a remembered alias onto a reappeared channel via recalc', () => {
+      seedRemoteDevice(store, makeRemoteDevice('Dev1'))
+      store.getState().projectActions.addIOGroup('Dev1', makeIOGroup('g1', '3', 1))
+      const pointId = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups[0].ioPoints![0].id
+      // Simulate the alias having been set earlier (recorded in session memory)
+      // while the channel is currently alias-less (as after a remove/re-add).
+      store.getState().projectActions.rememberChannelAlias(modbusMemoryKey('Dev1', 'g1', pointId), 'temp_sensor')
+      store.getState().projectActions.recalculateIecAddresses()
+      expect(store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups[0].ioPoints![0].alias).toBe(
+        'temp_sensor',
+      )
+    })
+  })
+
+  describe('rememberChannelAlias', () => {
+    it('stores an alias under its memory key and clears it when emptied', () => {
+      const key = vppMemoryKey('mod-a', 1, 'DO1')
+      store.getState().projectActions.rememberChannelAlias(key, '  relay_1  ')
+      expect(store.getState().iecAliasMemory[key]).toBe('relay_1')
+      store.getState().projectActions.rememberChannelAlias(key, '   ')
+      expect(store.getState().iecAliasMemory[key]).toBeUndefined()
+    })
+
+    it('is reset on a fresh project so aliases do not leak between projects', () => {
+      store.getState().projectActions.rememberChannelAlias(vppMemoryKey('mod-a', 1, 'DO1'), 'relay_1')
+      store.getState().projectActions.clearProjects()
+      expect(store.getState().iecAliasMemory).toEqual({})
     })
   })
 
@@ -2444,6 +3052,159 @@ describe('createProjectSlice', () => {
       seedRemoteDevice(store, { name: 'EtherCAT', protocol: 'ethercat' })
       const result = store.getState().projectActions.updateIOPointAlias('EtherCAT', 'g1', 'p1', 'alias')
       expect(result.ok).toBe(true)
+    })
+
+    it('rejects an alias that is already assigned to another channel', () => {
+      seedRemoteDevice(store, makeRemoteDevice('Dev1'))
+      store.getState().projectActions.addIOGroup('Dev1', makeIOGroup('g1', '3', 2))
+      const points = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups[0].ioPoints!
+      // Claim "dup" on the first point, then try to reuse it on the second.
+      store.getState().projectActions.updateIOPointAlias('Dev1', 'g1', points[0].id, 'dup')
+      const result = store.getState().projectActions.updateIOPointAlias('Dev1', 'g1', points[1].id, 'dup')
+      expect(result.ok).toBe(false)
+      expect(result.title).toBe('Alias already in use')
+      // The rejected write never lands.
+      expect(store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups[0].ioPoints![1].alias).toBe('')
+    })
+
+    it('cascades a rename onto variables bound to the point’s previous alias', () => {
+      seedRemoteDevice(store, makeRemoteDevice('Dev1'))
+      store.getState().projectActions.addIOGroup('Dev1', makeIOGroup('g1', '3', 2))
+      const pointId = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups[0].ioPoints![0].id
+      // First set an alias, then bind a program variable to it by name.
+      store.getState().projectActions.updateIOPointAlias('Dev1', 'g1', pointId, 'sensor_a')
+      seedPou(store, makePou('Prog', 'program', [locVar('reading', 'sensor_a')]))
+      // Renaming the point alias must follow the binding to the new name.
+      store.getState().projectActions.updateIOPointAlias('Dev1', 'g1', pointId, 'sensor_b')
+      expect(store.getState().project.data.pous[0].interface!.variables![0].location).toBe('sensor_b')
+    })
+  })
+
+  describe('renameAlias', () => {
+    it('cascades onto bound POU and global variable locations, leaving manual literals untouched', () => {
+      seedPou(store, makePou('Prog', 'program', [locVar('bound', 'relay_1'), locVar('manual', '%QX0.0')]))
+      seedGlobals(store, [locVar('gBound', 'relay_1', 'global')])
+      const result = store.getState().projectActions.renameAlias('relay_1', 'relay_2')
+      expect(result.renamed).toBe(2)
+      const vars = store.getState().project.data.pous[0].interface!.variables!
+      expect(vars[0].location).toBe('relay_2') // alias-bound → follows the rename
+      expect(vars[1].location).toBe('%QX0.0') // manual literal → untouched
+      expect(store.getState().project.data.configurations.resource.globalVariables![0].location).toBe('relay_2')
+    })
+
+    it('cascades a case-only change (the alias registry is case-sensitive)', () => {
+      seedPou(store, makePou('Prog', 'program', [locVar('bound', 'Relay')]))
+      const result = store.getState().projectActions.renameAlias('Relay', 'relay')
+      expect(result.renamed).toBe(1)
+      expect(store.getState().project.data.pous[0].interface!.variables![0].location).toBe('relay')
+    })
+
+    it('leaves bound variable locations untouched (orphaned) when the alias is cleared', () => {
+      seedPou(store, makePou('Prog', 'program', [locVar('bound', 'relay_1')]))
+      const result = store.getState().projectActions.renameAlias('relay_1', '')
+      // Clearing an alias is a deletion, not a rename: the bound variable keeps
+      // the now-missing alias name and orphans (surfaces the warning glyph),
+      // rather than being silently wiped. Same behavior as deleting the device.
+      expect(result.renamed).toBe(0)
+      expect(store.getState().project.data.pous[0].interface!.variables![0].location).toBe('relay_1')
+    })
+
+    it('is a no-op when the old alias is empty', () => {
+      seedPou(store, makePou('Prog', 'program', [locVar('bound', 'relay_1')]))
+      const result = store.getState().projectActions.renameAlias('', 'relay_2')
+      expect(result.renamed).toBe(0)
+      expect(store.getState().project.data.pous[0].interface!.variables![0].location).toBe('relay_1')
+    })
+
+    it('is a no-op when the name is unchanged', () => {
+      seedPou(store, makePou('Prog', 'program', [locVar('bound', 'relay_1')]))
+      const result = store.getState().projectActions.renameAlias('relay_1', 'relay_1')
+      expect(result.renamed).toBe(0)
+      expect(store.getState().project.data.pous[0].interface!.variables![0].location).toBe('relay_1')
+    })
+  })
+
+  describe('getCompileReadyProjectData', () => {
+    beforeEach(() => {
+      seedRuntimeV4Board(store)
+    })
+
+    it('resolves alias locations to addresses, honours manual literals, and drops missing aliases', () => {
+      seedRemoteDevice(store, makeRemoteDevice('Dev1'))
+      store.getState().projectActions.addIOGroup('Dev1', makeIOGroup('g1', '3', 2)) // %IW0, %IW1
+      const pointId = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups[0].ioPoints![0].id
+      store.getState().projectActions.updateIOPointAlias('Dev1', 'g1', pointId, 'flow') // flow → %IW0
+
+      seedPou(
+        store,
+        makePou('Prog', 'program', [
+          locVar('aliasBound', 'flow'), // → %IW0
+          locVar('manual', '%QX0.0'), // → %QX0.0 (verbatim)
+          locVar('ghost', 'no_such_alias'), // → '' (alias gone)
+          locVar('unlocated', ''), // → ''
+        ]),
+      )
+      // A POU whose interface carries no `variables` array — the resolver must
+      // skip it without throwing (early-return guard).
+      const current = store.getState().project
+      store.getState().projectActions.setProject({
+        ...current,
+        data: {
+          ...current.data,
+          pous: [
+            ...current.data.pous,
+            {
+              name: 'NoVars',
+              pouType: 'program',
+              interface: {},
+              body: makeBody(),
+              documentation: '',
+            } as unknown as PLCPou,
+          ],
+        },
+      })
+      seedGlobals(store, [locVar('gFlow', 'flow', 'global')]) // → %IW0
+
+      const data = store.getState().projectActions.getCompileReadyProjectData()
+      const resolved = data.pous[0].interface!.variables!
+      expect(resolved.map((v) => v.location)).toEqual(['%IW0', '%QX0.0', '', ''])
+      expect(data.configurations.resource.globalVariables![0].location).toBe('%IW0')
+
+      // The live store keeps the alias-name form — only the returned snapshot
+      // is resolved.
+      expect(store.getState().project.data.pous[0].interface!.variables![0].location).toBe('flow')
+    })
+  })
+
+  describe('getAliasIndex', () => {
+    beforeEach(() => {
+      seedRuntimeV4Board(store)
+    })
+
+    it('exposes the live alias → address map', () => {
+      seedRemoteDevice(store, makeRemoteDevice('Dev1'))
+      store.getState().projectActions.addIOGroup('Dev1', makeIOGroup('g1', '3', 2)) // %IW0, %IW1
+      const pointId = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups[0].ioPoints![0].id
+      store.getState().projectActions.updateIOPointAlias('Dev1', 'g1', pointId, 'flow')
+
+      expect(store.getState().projectActions.getAliasIndex().get('flow')).toBe('%IW0')
+    })
+
+    it('returns the same reference until producer state changes', () => {
+      seedRemoteDevice(store, makeRemoteDevice('Dev1'))
+      store.getState().projectActions.addIOGroup('Dev1', makeIOGroup('g1', '3', 2))
+      const first = store.getState().projectActions.getAliasIndex()
+      // A POU edit must NOT invalidate the memo — the LSP calls this on every
+      // reconcile, i.e. on every keystroke in an ST editor.
+      seedPou(store, makePou('Prog', 'program', [locVar('x', '')]))
+      expect(store.getState().projectActions.getAliasIndex()).toBe(first)
+
+      // A producer change must.
+      const pointId = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups[0].ioPoints![0].id
+      store.getState().projectActions.updateIOPointAlias('Dev1', 'g1', pointId, 'flow')
+      const second = store.getState().projectActions.getAliasIndex()
+      expect(second).not.toBe(first)
+      expect(second.get('flow')).toBe('%IW0')
     })
   })
 
@@ -2807,6 +3568,56 @@ describe('createProjectSlice', () => {
       expect(result.ok).toBe(false)
       expect(result.title).toBe('Cannot Delete Global Variable')
       expect(result.message).toContain('Consumer')
+      expect((result.data as { referencingPous: string[] }).referencingPous).toEqual(['Consumer'])
+      // Not forced → nothing was deleted.
+      expect(
+        store.getState().project.data.configurations.resource.globalVariables.some((v) => v.name === 'SharedVar'),
+      ).toBe(true)
+    })
+
+    it('deleteVariable global with force cascades: removes the global + external refs from every POU', () => {
+      store.getState().projectActions.createVariable({ scope: 'global', data: makeVariable('SharedVar', 'global') })
+      for (const name of ['Consumer', 'Consumer2']) {
+        seedPou(store, {
+          ...makePou(name, 'program'),
+          interface: {
+            variables: [
+              {
+                name: 'SharedVar',
+                class: 'external',
+                type: { definition: 'base-type', value: 'INT' },
+                location: '',
+                documentation: '',
+              },
+              {
+                name: 'keep_me',
+                class: 'local',
+                type: { definition: 'base-type', value: 'BOOL' },
+                location: '',
+                documentation: '',
+              },
+            ],
+          },
+        })
+      }
+
+      const result = store.getState().projectActions.deleteVariable({
+        scope: 'global',
+        variableName: 'SharedVar',
+        force: true,
+      })
+
+      expect(result.ok).toBe(true)
+      // The global itself is gone.
+      expect(
+        store.getState().project.data.configurations.resource.globalVariables.some((v) => v.name === 'SharedVar'),
+      ).toBe(false)
+      // The external declaration is removed from every referencing POU; unrelated locals stay.
+      for (const name of ['Consumer', 'Consumer2']) {
+        const vars = store.getState().project.data.pous.find((p) => p.name === name)?.interface?.variables ?? []
+        expect(vars.some((v) => v.name === 'SharedVar')).toBe(false)
+        expect(vars.some((v) => v.name === 'keep_me')).toBe(true)
+      }
     })
 
     it('updateOpcUaServerConfig with top-level updates (cycleTimeMs)', () => {

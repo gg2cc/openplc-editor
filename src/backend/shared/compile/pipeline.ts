@@ -4,7 +4,7 @@
  * Single source of truth for the full compile flow (Steps 0–13 in
  * the editor's canonical pipeline).  Editor and web both drive this
  * function through a `CompilerPlatformPort`; the platform port
- * abstracts the three places where platform truly differs (xml2st
+ * abstracts the three places where platform truly differs (ST transpiler
  * transport, arduino-cli transport, runtime upload transport).
  * Everything else — preprocessing, XML generation, strucpp compile,
  * conf authoring, defines authoring, bundle composition, ordering,
@@ -20,6 +20,7 @@
  * `emit` callback (progress events).  No disk I/O, no globals.
  */
 
+import { isVersionAtLeast } from '../../../frontend/utils/semver'
 import type {
   CompilerPlatformPort,
   PlatformDeviceContext,
@@ -30,7 +31,12 @@ import { composeRuntimeV4Bundle } from '../../../middleware/shared/utils/library
 import { resolveTargetCapabilities } from '../../../middleware/shared/utils/target-capabilities'
 import type { BoardHalsCompileEntry } from '../firmware/build-arduino-cli-args'
 import { buildArduinoCliCompileArgs } from '../firmware/build-arduino-cli-args'
-import { describeIncompatibleRuntime, isStrucppCompatibleRuntime } from '../firmware/runtime-version-gate'
+import {
+  describeEditorTooOldForRuntime,
+  describeIncompatibleRuntime,
+  describeVppRuntimeMismatch,
+  isStrucppCompatibleRuntime,
+} from '../firmware/runtime-version-gate'
 import { buildKnownPous, emitCompileErrorEvents } from '../library/program-build-helpers'
 import { runProgramBuildPipeline } from '../library/program-build-pipeline'
 import type { DevicePin } from '../types/PLC/devices'
@@ -104,6 +110,19 @@ export interface BoardHalsBuildEntry extends BoardHalsCompileEntry {
    *  install fires only when that board is selected.  Boards that
    *  don't need a specific library never download it. */
   extra_libraries?: string[]
+  /** Prebuilt arduino-hal (provisioning="prebuilt"): the precompiled Arduino
+   *  library dir, linked via a 2nd `--library`. Present only for arduino
+   *  prebuilt boards (the `source` HAL still compiles as the integration layer).
+   *  Sourced from the VPP manifest `device.hal.precompiledLibrary`. */
+  precompiledLibraryDir?: string
+  /** Exact Arduino core version to install/verify before linking a prebuilt
+   *  arduino library (ABI-locked). From the VPP manifest `target.coreVersion`. */
+  coreVersion?: string
+  /** Vendor board-manager index (`package_<vendor>_index.json`).  From the
+   *  VPP manifest `target.boardManagerUrl` or hals.json `board_manager_url`.
+   *  Forwarded to `installArduinoCore`, which passes it to arduino-cli as
+   *  `--additional-urls` so cores outside the built-in index resolve. */
+  boardManagerUrl?: string
   /** Compiler / runtime identifier (`'arduino-cli' | 'openplc-compiler'
    *  | 'simulator'`).  Used by `resolveTargetCapabilities`'s
    *  preset lookup — without this the resolver can't pick the right
@@ -203,6 +222,19 @@ export interface RunCompilePipelineArgs {
    *  addresses without re-reading the file.  Called once per
    *  successful strucpp compile. */
   cacheDebugData?: (md5: string, debugMapJson: string) => void
+  /**
+   * This editor's own version, compared against the `minEditorVersion`
+   * a runtime publishes at `GET /api/capabilities` (DOPE-448).
+   *
+   * Injected rather than imported: `APP_VERSION` lives in
+   * `frontend/data/`, and the layer rules forbid `backend/shared/`
+   * from reaching into `data` — correctly, since which build is
+   * running is a fact about the host app, not about the compile.
+   *
+   * Absent means the caller opts out of the check, so the gate is
+   * inert for callers written before it existed.
+   */
+  editorVersion?: string
   /** Persisted VPP Modbus screen state for the target device,
    *  sourced from `DeviceConfiguration.vendorScreenData` under
    *  the `modbus_rtu` / `modbus_tcp` keys.  Threaded straight
@@ -230,7 +262,7 @@ export interface RunCompilePipelineArgs {
 
 export interface RunCompilePipelineResult {
   success: boolean
-  /** Structured strucpp + xml2st diagnostics from this run.  Carries
+  /** Structured strucpp diagnostics from this run.  Carries
    *  the per-error events the renderer's navigation keys off. */
   errors?: StructuredCompileError[]
   /** Compiled firmware bytes when the pipeline reached the
@@ -345,6 +377,7 @@ async function runCompilePipelineInner(
     cacheDebugData,
     vppModbusState,
     vendorScreenData,
+    editorVersion,
   } = args
 
   // Resolve the board's effective capabilities from `boardEntry`.
@@ -377,10 +410,9 @@ async function runCompilePipelineInner(
   // ---------------------------------------------------------------------
   // Step 0b: Reject blank FBD variable blocks before XML generation.
   //
-  // An unnamed FBD in/out variable serialises to an empty
-  // `<expression/>`, which makes xml2st crash with the opaque
-  // `'NoneType' object has no attribute 'split'`.  Catch it here and
-  // tell the user exactly which POU to fix.
+  // An unnamed FBD in/out variable has no expression for the ST
+  // transpiler to emit, producing invalid code downstream.  Catch it
+  // here and tell the user exactly which POU to fix.
   // ---------------------------------------------------------------------
   const emptyVariables = findEmptyFbdVariables(processedData)
   if (emptyVariables.length > 0) {
@@ -403,7 +435,7 @@ async function runCompilePipelineInner(
   // so this hop never builds PLCOpen XML.  Native STRUCT declarations
   // are the only emission mode the transpiler supports — the legacy
   // matiec struct→FB rewrite isn't ported, so there are no
-  // equivalents of the old `xml2stArgs` flags.
+  // equivalents of the old struct-rewrite flags.
   // ---------------------------------------------------------------------
   emit({ stage: 'st', message: 'Generating Structured Text...', level: 'info' })
   // The pipeline carries the editor's schema-shape `PLCProjectData`,
@@ -581,6 +613,51 @@ async function runCompilePipelineInner(
       return bailError(emit, 'runtime-version', describeIncompatibleRuntime(versionCheck.version))
     }
 
+    // The other direction (DOPE-448): the runtime published a
+    // `minEditorVersion` at `/api/capabilities` and this editor is below
+    // it.  Inert in two independent ways, both of which describe the
+    // world as it is today: `versionCheck.minEditorVersion` is null for
+    // every runtime predating that endpoint, and `editorVersion` is
+    // absent for any caller that hasn't opted in — `isVersionAtLeast`
+    // passes on an absent floor either way.
+    if (editorVersion && !isVersionAtLeast(editorVersion, versionCheck.minEditorVersion)) {
+      return bailError(
+        emit,
+        'runtime-version',
+        describeEditorTooOldForRuntime({
+          runtimeVersion: versionCheck.version,
+          // Narrowed by the guard above: `isVersionAtLeast` only returns
+          // false when it parsed a real floor out of this field.
+          minEditorVersion: versionCheck.minEditorVersion ?? '',
+          editorVersion,
+          // Only the editor's direct-HTTPS context knows an address the
+          // user would recognise; on web the device sits behind an
+          // orchestrator agent, so the message omits the label rather
+          // than printing an agent id nobody can act on.
+          deviceLabel: deviceContext.kind === 'editor-https' ? deviceContext.ip : undefined,
+        }),
+      )
+    }
+
+    // Arc 4 (DOPE-448): the VPP whose HAL is about to be built on this
+    // device declares a runtime floor, and this runtime is below it.
+    // Checked here rather than at install time because the target device
+    // is unknown until the user connects to one — and checked BEFORE the
+    // upload, because the failure mode it prevents is a plugin that
+    // loads on a live PLC and dies at scan time.
+    if (!isVersionAtLeast(versionCheck.version, vppResult.minRuntimeVersion)) {
+      return bailError(
+        emit,
+        'runtime-version',
+        describeVppRuntimeMismatch({
+          boardTarget,
+          minRuntimeVersion: vppResult.minRuntimeVersion ?? '',
+          runtimeVersion: versionCheck.version,
+          deviceLabel: deviceContext.kind === 'editor-https' ? deviceContext.ip : undefined,
+        }),
+      )
+    }
+
     emit({ stage: 'upload', message: 'Uploading Runtime v4 bundle...', level: 'info' })
     const uploadResult = await port.uploadRuntimeV4({ bundle, context: deviceContext }, makePlatformLog(emit, 'upload'))
     if (!uploadResult.ok) {
@@ -643,7 +720,17 @@ async function runCompilePipelineInner(
   // ---------------------------------------------------------------------
   emit({ stage: 'core-install', message: 'Installing Arduino core...', level: 'info' })
   const coreInstall = await port.installArduinoCore(
-    { coreId: typeof boardEntry.platform === 'string' ? deriveArduinoCoreFromPlatform(boardEntry.platform) : '' },
+    {
+      coreId: typeof boardEntry.platform === 'string' ? deriveArduinoCoreFromPlatform(boardEntry.platform) : '',
+      // Pin the exact core version for prebuilt arduino libraries (ABI-locked).
+      ...(boardEntry.coreVersion ? { coreVersion: boardEntry.coreVersion } : {}),
+      // Vendor board-manager index for cores outside arduino-cli's built-in
+      // list.  Resolved from the VPP manifest's `target.boardManagerUrl`; the
+      // editor turns it into `--additional-urls` (and refreshes the index)
+      // so the core can be auto-installed instead of erroring out with
+      // "Platform not found".
+      ...(boardEntry.boardManagerUrl ? { boardManagerUrl: boardEntry.boardManagerUrl } : {}),
+    },
     makePlatformLog(emit, 'core-install'),
   )
   if (!coreInstall.ok) {
@@ -721,6 +808,9 @@ async function runCompilePipelineInner(
     libraryPath: 'src',
     avrLibStdCppInclude,
     parallel: arduinoCliParallel,
+    // Prebuilt arduino-hal: link the precompiled vendor library alongside the
+    // source integration layer. arduino-cli accepts a 2nd --library.
+    ...(boardEntry.precompiledLibraryDir ? { prebuiltLibraryPath: boardEntry.precompiledLibraryDir } : {}),
   })
 
   // Run arduino-cli compile.  Editor: spawns the binary.  Web: HTTP

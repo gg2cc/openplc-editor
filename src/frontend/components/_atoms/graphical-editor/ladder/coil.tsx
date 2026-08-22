@@ -1,10 +1,11 @@
 import * as Popover from '@radix-ui/react-popover'
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 
 import { useDebugger } from '../../../../../middleware/shared/providers'
 import { useDebugCompositeKey } from '../../../../hooks/use-debug-composite-key'
 import { useDebugValue, useIsDebuggerVisible } from '../../../../hooks/use-debug-value'
 import { forceDebugVariable, releaseDebugVariable } from '../../../../services/debug-force-variable'
+import { isExpressionValidForType } from '../../../../services/graphical-scope'
 import { useOpenPLCStore } from '../../../../store'
 import { cn } from '../../../../utils/cn'
 import { useBoundPou } from '../../../_features/[workspace]/editor/graphical/active-context'
@@ -13,20 +14,15 @@ import { VariablesBlockAutoComplete } from './autocomplete'
 import { CustomHandle } from './handle'
 import { getLadderPouVariablesRungNodeAndEdges } from './utils'
 import { DEFAULT_COIL_BLOCK_HEIGHT, DEFAULT_COIL_BLOCK_WIDTH, DEFAULT_COIL_TYPES } from './utils/constants'
-import type { BasicNodeData, CoilProps } from './utils/types'
+import type { CoilProps } from './utils/types'
 
 export type { CoilNode } from './utils/types'
 
-export const Coil = (block: CoilProps) => {
+const Coil = (block: CoilProps) => {
   const { selected, data, id } = block
   const pouName = useBoundPou()
-  const {
-    project: {
-      data: { pous },
-    },
-    ladderFlows,
-    ladderFlowActions: { updateNode },
-  } = useOpenPLCStore()
+  const pous = useOpenPLCStore((state) => state.project.data.pous)
+  const updateNode = useOpenPLCStore((state) => state.ladderFlowActions.updateNode)
 
   const debugger_ = useDebugger()
   const isDebuggerVisible = useIsDebuggerVisible()
@@ -83,55 +79,22 @@ export const Coil = (block: CoilProps) => {
   }, [])
 
   /**
-   * Update wrongVariable state when the table of variables is updated
+   * Validate the coil's variable against the full project scope via the
+   * STruC++ LSP: a coil accepts any BOOL expression, including instance
+   * members (`TON0.Q`) and struct/array members the local interface list
+   * can't see. Re-runs when the project variables change or the coil's own
+   * variable name changes.
    */
   useEffect(() => {
-    const {
-      node: coilNode,
-      rung,
-      variables,
-    } = getLadderPouVariablesRungNodeAndEdges(pouName, pous, ladderFlows, {
-      nodeId: id,
+    const name = data.variable?.name?.trim() ?? ''
+    let cancelled = false
+    void isExpressionValidForType(pouName, name, 'BOOL').then((valid) => {
+      if (!cancelled) setWrongVariable(!valid)
     })
-
-    if (!rung || !coilNode) return
-
-    const canonicalVariableName = (coilNode.data as BasicNodeData).variable?.name?.trim() ?? ''
-
-    const variable = variables.all.find(
-      (v) => v.name.toLowerCase() === canonicalVariableName.toLowerCase() && v.type.definition !== 'derived',
-    )
-
-    if (!variable) {
-      setWrongVariable(true)
-      return
+    return () => {
+      cancelled = true
     }
-
-    if (variable && (variable.type.definition !== 'base-type' || variable.type.value.toUpperCase() !== 'BOOL')) {
-      setWrongVariable(true)
-      return
-    }
-
-    if ((coilNode.data as BasicNodeData).variable.name.toLowerCase() !== variable.name.toLowerCase()) {
-      setCoilVariableValue(variable.name)
-      updateNode({
-        editorName: pouName,
-        rungId: rung.id,
-        nodeId: coilNode.id,
-        node: {
-          ...coilNode,
-          data: {
-            ...coilNode.data,
-            variable,
-          },
-        },
-      })
-      setWrongVariable(false)
-      return
-    }
-
-    setWrongVariable(false)
-  }, [pous])
+  }, [pous, pouName, data.variable.name])
 
   const debuggerFillColor = (() => {
     if (!isDebuggerVisible || !data.variable.name || wrongVariable) return undefined
@@ -181,35 +144,19 @@ export const Coil = (block: CoilProps) => {
    */
   const handleSubmitCoilVariableOnTextareaBlur = (variableName?: string) => {
     const variableNameToSubmit = variableName || coilVariableValue
-    const { variables, rung, node } = getLadderPouVariablesRungNodeAndEdges(pouName, pous, ladderFlows, {
+    const { project, ladderFlows } = useOpenPLCStore.getState()
+    const { rung, node } = getLadderPouVariablesRungNodeAndEdges(pouName, project.data.pous, ladderFlows, {
       nodeId: id,
       variableName: variableNameToSubmit,
     })
     if (!rung || !node) return
 
-    const variable = variables.selected
-    if (
-      !variable ||
-      variable.name !== variableNameToSubmit ||
-      variable.type.definition !== 'base-type' ||
-      variable.type.value.toUpperCase() !== 'BOOL'
-    ) {
-      updateNode({
-        editorName: pouName,
-        rungId: rung.id,
-        nodeId: node.id,
-        node: {
-          ...node,
-          data: {
-            ...node.data,
-            variable: { name: variableNameToSubmit },
-          },
-        },
-      })
-      setWrongVariable(true)
-      return
-    }
+    // Blur with an unchanged name is not an edit — skip the write so merely
+    // clicking in and out of a coil never marks the POU as modified.
+    if (variableNameToSubmit === (node.data as { variable?: { name?: string } }).variable?.name) return
 
+    // Persist whatever the user typed; the validation effect resolves and
+    // type-checks it against the full project scope and drives the red state.
     updateNode({
       editorName: pouName,
       rungId: rung.id,
@@ -218,11 +165,10 @@ export const Coil = (block: CoilProps) => {
         ...node,
         data: {
           ...node.data,
-          variable: variable,
+          variable: { name: variableNameToSubmit },
         },
       },
     })
-    setWrongVariable(false)
   }
 
   const onChangeHandler = () => {
@@ -265,10 +211,13 @@ export const Coil = (block: CoilProps) => {
             readOnly={isDebuggerVisible}
             onFocus={(e) => {
               e.target.select()
-              const { node, rung } = getLadderPouVariablesRungNodeAndEdges(pouName, pous, ladderFlows, {
+              const { project, ladderFlows } = useOpenPLCStore.getState()
+              const { node, rung } = getLadderPouVariablesRungNodeAndEdges(pouName, project.data.pous, ladderFlows, {
                 nodeId: id ?? '',
               })
               if (!node || !rung) return
+              // Drag-lock while typing is UI state, not an edit — transient
+              // so focusing the input never marks the flow as modified.
               updateNode({
                 editorName: pouName,
                 nodeId: node.id,
@@ -277,11 +226,13 @@ export const Coil = (block: CoilProps) => {
                   ...node,
                   draggable: false,
                 },
+                transient: true,
               })
               return
             }}
             onBlur={() => {
-              const { node, rung } = getLadderPouVariablesRungNodeAndEdges(pouName, pous, ladderFlows, {
+              const { project, ladderFlows } = useOpenPLCStore.getState()
+              const { node, rung } = getLadderPouVariablesRungNodeAndEdges(pouName, project.data.pous, ladderFlows, {
                 nodeId: id ?? '',
               })
               if (!node || !rung) return
@@ -293,6 +244,7 @@ export const Coil = (block: CoilProps) => {
                   ...node,
                   draggable: node.data.draggable as boolean,
                 },
+                transient: true,
               })
               return
             }}
@@ -380,3 +332,7 @@ export const Coil = (block: CoilProps) => {
     </div>
   )
 }
+
+const exportCoil = memo(Coil)
+
+export { exportCoil as Coil }

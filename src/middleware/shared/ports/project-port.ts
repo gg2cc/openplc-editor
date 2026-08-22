@@ -53,6 +53,9 @@ export interface ProjectResponse {
     devicePinMapping?: DevicePin[] | Record<string, DevicePin[]>
     /** Warnings from parsing (e.g. dropped files that failed validation). */
     warnings?: string[]
+    /** `datatypes/*.dt` files that failed to parse on load, preserved
+     *  raw so the save flow echoes them back verbatim. */
+    unparsedDataTypeFiles?: RawProjectFile[]
     /**
      * Raw file contents as returned by the backend (path → text), captured
      * before parsing. Used by the save flow to upload byte-identical content
@@ -76,6 +79,16 @@ export interface ProjectResponse {
      * expose READMEs (desktop editor, dev:local).
      */
     readme?: string | null
+    /**
+     * Signals this response was just converted from a pending raw PLCopen
+     * import (Node's `plcopen-pending-import.xml` marker) rather than
+     * loaded from a normal `project.json`. Set only by the adapter branch
+     * that runs `parsePlcopenXml` in place of `parseProjectFiles`. The
+     * caller should persist immediately (`saveProject`) so the marker gets
+     * pruned server-side — Node's save endpoint deletes any file not in
+     * the incoming payload. Absent ⇒ ordinary open/import, no auto-save.
+     */
+    wasPendingPlcopenImport?: boolean
   }
   error?: {
     title: string
@@ -112,6 +125,10 @@ export interface WriteProjectFiles {
   serverFiles: RawProjectFile[]
   /** Remote device config files with pre-serialized JSON content */
   remoteDeviceFiles: RawProjectFile[]
+  /** Data type files (`datatypes/<Name>.dt`) with pre-serialized ST
+   *  `TYPE…END_TYPE` content, one declaration per file.  Empty until
+   *  the `.dt` write path is switched on (DOPE-533). */
+  dataTypeFiles: RawProjectFile[]
   /** Relative paths to delete from disk (e.g. 'pous/programs/OldPou.st') */
   deletions: string[]
 }
@@ -162,6 +179,9 @@ export interface RawProjectFiles {
     serverFiles: RawProjectFile[]
     /** Raw remote device config files from devices/remote/ */
     remoteDeviceFiles: RawProjectFile[]
+    /** Raw data type files from datatypes/ (`.dt`, one ST `TYPE…END_TYPE`
+     *  declaration each).  Empty on projects that predate the format. */
+    dataTypeFiles: RawProjectFile[]
     /** See {@link ProjectResponse.data.canEdit}.  Carried through the
      *  raw layer so adapters that build `ProjectResponse` from a raw
      *  fetch don't have to round-trip the details endpoint twice. */
@@ -169,6 +189,14 @@ export interface RawProjectFiles {
     /** See {@link ProjectResponse.data.readme}.  Carried through the
      *  raw layer for the same reason as `canEdit`. */
     readme?: string | null
+    /**
+     * Raw PLCopen XML content when the project directory is a bare
+     * pending-import marker (Node's `plcopen-pending-import.xml`) instead
+     * of a normal project — `apiFilesToRaw` surfaces the envelope's
+     * `'plcopen-pending-import.xml'` key here. `undefined` is the
+     * "not pending" case (normal project, has `project.json`).
+     */
+    pendingPlcopenSource?: string
   }
   error?: { title: string; description: string }
 }
@@ -312,4 +340,18 @@ export interface ProjectPort {
     migrated?: boolean
     error?: string
   }>
+
+  /**
+   * Pick a PLCopen XML file to import and read its contents.
+   * Editor: native open-file dialog filtered to .xml.
+   * Web: hidden <input type="file" accept=".xml">.
+   */
+  pickPlcopenImportFile(): Promise<{ success: boolean; content?: string; error?: string }>
+
+  /**
+   * Persist generated PLCopen XML content as a file the user can access.
+   * Editor: native save-file dialog, writes to disk.
+   * Web: triggers a browser download of the blob.
+   */
+  exportPlcopenFile(defaultFileName: string, xml: string): Promise<{ success: boolean; error?: string }>
 }

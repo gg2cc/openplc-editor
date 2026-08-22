@@ -21,7 +21,7 @@
 
 import type { OpcUaFieldConfig, OpcUaNodeConfig } from '@root/middleware/shared/ports/open-plc-types'
 
-import { unpackDebugAddr } from '../debug-parser'
+import type { DebugLeafInfo } from '../debug-parser'
 import {
   buildDebugPath,
   buildGlobalDebugPath,
@@ -33,6 +33,11 @@ import type { PLCInstanceInfo, ResolvedField } from './types'
 export interface LeafAddress {
   arr: number
   elem: number
+  /** Canonical IEC type from the compiler's debug map (single source of
+   *  truth — never the stored project-model datatype). */
+  type: string
+  /** Canonical byte width from the compiler's debug map. */
+  size: number
 }
 
 export class OpcUaConfigError extends Error {
@@ -53,11 +58,10 @@ const toInstanceMapping = (instances: PLCInstanceInfo[]): PLCInstanceMapping[] =
  * Look up a STruC++ debug path in the shared leaf map and return the
  * (arr, elem) address. Returns null on miss. Wraps unpackDebugAddr.
  */
-const lookup = (path: string, pathToAddr: Map<string, number>): LeafAddress | null => {
-  const packed = pathToAddr.get(path.toUpperCase())
-  if (packed === undefined) return null
-  const { arrayIdx, elemIdx } = unpackDebugAddr(packed)
-  return { arr: arrayIdx, elem: elemIdx }
+const lookup = (path: string, pathToAddr: Map<string, DebugLeafInfo>): LeafAddress | null => {
+  const info = pathToAddr.get(path.toUpperCase())
+  if (info === undefined) return null
+  return { arr: info.arr, elem: info.elem, type: info.type, size: info.size }
 }
 
 /**
@@ -95,7 +99,7 @@ const pathForNode = (
  */
 export const resolveVariableAddress = (
   node: OpcUaNodeConfig,
-  pathToAddr: Map<string, number>,
+  pathToAddr: Map<string, DebugLeafInfo>,
   instances: PLCInstanceInfo[],
 ): LeafAddress => {
   const result = pathForNode(node.pouName, node.variablePath, instances)
@@ -128,7 +132,7 @@ const resolveFieldRecursively = (
   field: OpcUaFieldConfig,
   parentPath: string,
   pouName: string,
-  pathToAddr: Map<string, number>,
+  pathToAddr: Map<string, DebugLeafInfo>,
   instanceName: string | null,
   droppedPaths: string[],
 ): ResolvedField | null => {
@@ -149,6 +153,7 @@ const resolveFieldRecursively = (
     return {
       name: field.fieldPath,
       datatype: field.datatype || 'UNKNOWN',
+      size: null,
       arr: null,
       elem: null,
       permissions: field.permissions,
@@ -156,7 +161,9 @@ const resolveFieldRecursively = (
     }
   }
 
-  // Leaf field.
+  // Leaf field. datatype/size come from the compiler's debug map (the
+  // canonical source), not the stored field.datatype — the runtime
+  // encodes/decodes this leaf by exactly these.
   const debugPath =
     pouName === 'GVL' || pouName === 'CONFIG'
       ? buildGlobalDebugPath(fullFieldPath)
@@ -169,7 +176,10 @@ const resolveFieldRecursively = (
 
   return {
     name: field.fieldPath,
-    datatype: field.datatype || 'UNKNOWN',
+    // Canonical type wins; fall back to the stored field datatype only if
+    // the debug map somehow carries no type (malformed/old map).
+    datatype: addr.type || field.datatype || 'UNKNOWN',
+    size: addr.size,
     arr: addr.arr,
     elem: addr.elem,
     permissions: field.permissions,
@@ -182,7 +192,7 @@ const resolveFieldRecursively = (
  */
 export const resolveStructureAddresses = (
   node: OpcUaNodeConfig,
-  pathToAddr: Map<string, number>,
+  pathToAddr: Map<string, DebugLeafInfo>,
   instances: PLCInstanceInfo[],
   droppedPaths: string[] = [],
 ): ResolvedField[] => {
@@ -191,7 +201,8 @@ export const resolveStructureAddresses = (
     return [
       {
         name: node.variablePath,
-        datatype: node.variableType,
+        datatype: addr.type,
+        size: addr.size,
         arr: addr.arr,
         elem: addr.elem,
         permissions: node.permissions,
@@ -231,7 +242,7 @@ export const resolveStructureAddresses = (
  */
 export const resolveArrayAddress = (
   node: OpcUaNodeConfig,
-  pathToAddr: Map<string, number>,
+  pathToAddr: Map<string, DebugLeafInfo>,
   instances: PLCInstanceInfo[],
 ): LeafAddress => {
   const result = pathForNode(node.pouName, node.variablePath, instances)
@@ -239,7 +250,7 @@ export const resolveArrayAddress = (
 
   const upperPrefix = `${result.path.toUpperCase()}[`
   let best: { addr: LeafAddress; idx: number } | null = null
-  for (const [path, packed] of pathToAddr) {
+  for (const [path, info] of pathToAddr) {
     if (!path.startsWith(upperPrefix)) continue
     const close = path.indexOf(']', upperPrefix.length)
     // Reject array-of-struct sub-elements: `FOO[1].FIELD` matches
@@ -248,8 +259,7 @@ export const resolveArrayAddress = (
     const idx = Number(path.slice(upperPrefix.length, close))
     if (!Number.isFinite(idx)) continue
     if (best === null || idx < best.idx) {
-      const { arrayIdx, elemIdx } = unpackDebugAddr(packed)
-      best = { addr: { arr: arrayIdx, elem: elemIdx }, idx }
+      best = { addr: { arr: info.arr, elem: info.elem, type: info.type, size: info.size }, idx }
     }
   }
   if (best) return best.addr
@@ -262,4 +272,138 @@ export const resolveArrayAddress = (
       `  Expected debug path: ${result.path}[<index>]\n` +
       `  No array elements with that prefix found in debug-map.json.`,
   )
+}
+
+/** One debug-map leaf below an array element, split into member segments. */
+interface ElementLeaf {
+  /** Member path under the element (`['A']`, `['INNER', 'B']`). */
+  segments: string[]
+  info: DebugLeafInfo
+}
+
+/**
+ * Split the debug-map suffix that follows an array's base path into
+ * segments, keeping index runs attached to the token they subscript:
+ *
+ *   `[1].A`        → ['[1]', 'A']
+ *   `[1][2].A.B`   → ['[1][2]', 'A', 'B']
+ *   `[3].INNER[0]` → ['[3]', 'INNER[0]']
+ *
+ * Dots only ever separate members (indices are numeric), so a plain
+ * split is enough.
+ */
+const splitSuffixSegments = (suffix: string): string[] => suffix.split('.').filter((part) => part.length > 0)
+
+/** Numeric sort key for an element token: `[1]` → [1], `[2][3]` → [2, 3]. */
+const elementIndexKey = (elementToken: string): number[] =>
+  [...elementToken.matchAll(/-?\d+/g)].map((match) => Number(match[0]))
+
+/** Dimension-wise comparison so elements come out in IEC index order. */
+const compareIndexKeys = (a: number[], b: number[]): number => {
+  const width = Math.max(a.length, b.length)
+  const perDimension = Array.from({ length: width }, (_, i) => (a[i] ?? 0) - (b[i] ?? 0))
+  return perDimension.find((diff) => diff !== 0) ?? 0
+}
+
+/**
+ * Group leaves into a field tree by their segment at `depth`. A group
+ * whose own leaf exists at that depth is a leaf field (address from the
+ * debug map); otherwise it is a container and recurses.
+ */
+const fieldsFromLeaves = (
+  leaves: ElementLeaf[],
+  depth: number,
+  permissions: ResolvedField['permissions'],
+): ResolvedField[] => {
+  const groups = new Map<string, ElementLeaf[]>()
+  for (const leaf of leaves) {
+    const head = leaf.segments[depth]
+    const bucket = groups.get(head)
+    if (bucket) bucket.push(leaf)
+    else groups.set(head, [leaf])
+  }
+
+  const fields: ResolvedField[] = []
+  for (const [name, group] of groups) {
+    const own = group.find((leaf) => leaf.segments.length === depth + 1)
+    if (own) {
+      fields.push({
+        name,
+        datatype: own.info.type || 'UNKNOWN',
+        size: own.info.size,
+        arr: own.info.arr,
+        elem: own.info.elem,
+        permissions,
+      })
+      continue
+    }
+    fields.push({
+      name,
+      // Container — the struct/FB type name isn't in the debug map and
+      // the runtime only needs it for leaves (it creates an Object node).
+      datatype: 'UNKNOWN',
+      size: null,
+      arr: null,
+      elem: null,
+      permissions,
+      fields: fieldsFromLeaves(group, depth + 1, permissions),
+    })
+  }
+  return fields
+}
+
+/**
+ * Resolve an array whose elements are a derived type (UDT / FB instance)
+ * into per-element structure fields, straight from the compiler's debug
+ * map.
+ *
+ * Such an array has no leaf of its own — the debug map only carries
+ * `ARR[i].FIELD` (and deeper) — so `resolveArrayAddress` cannot address
+ * it by design. The variable picker pre-expands the elements into the
+ * node's `fields` only when the array is 1-D and small enough
+ * (MAX_ARRAY_EXPANSION), so bigger or multi-dimensional UDT arrays reach
+ * the compiler as a bare `array` node with no fields. Rebuilding the
+ * element fields from the debug map covers every case and keeps the
+ * compiler as the single source of truth for type/size/address.
+ *
+ * Returns `[]` when the array has no sub-element leaves — i.e. a plain
+ * array of base types, which `resolveArrayAddress` handles.
+ */
+export const resolveArrayElementFields = (
+  node: OpcUaNodeConfig,
+  pathToAddr: Map<string, DebugLeafInfo>,
+  instances: PLCInstanceInfo[],
+): ResolvedField[] => {
+  const result = pathForNode(node.pouName, node.variablePath, instances)
+  if ('error' in result) throw result.error
+
+  const basePath = result.path.toUpperCase()
+  const prefix = `${basePath}[`
+
+  // element token → its leaves, in debug-map (memory layout) order
+  const perElement = new Map<string, ElementLeaf[]>()
+  for (const [path, info] of pathToAddr) {
+    if (!path.startsWith(prefix)) continue
+    const segments = splitSuffixSegments(path.slice(basePath.length))
+    const memberSegments = segments.slice(1)
+    // A bare `ARR[i]` leaf is a base-type element, not an array of UDT.
+    if (memberSegments.length === 0) continue
+    const elementToken = segments[0]
+    const leaf: ElementLeaf = { segments: memberSegments, info }
+    const bucket = perElement.get(elementToken)
+    if (bucket) bucket.push(leaf)
+    else perElement.set(elementToken, [leaf])
+  }
+
+  return [...perElement.entries()]
+    .sort(([a], [b]) => compareIndexKeys(elementIndexKey(a), elementIndexKey(b)))
+    .map(([elementToken, leaves]) => ({
+      name: elementToken,
+      datatype: node.elementType || 'UNKNOWN',
+      size: null,
+      arr: null,
+      elem: null,
+      permissions: node.permissions,
+      fields: fieldsFromLeaves(leaves, 0, node.permissions),
+    }))
 }

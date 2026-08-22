@@ -94,7 +94,7 @@ describe('tabs/utils', () => {
       expect(result.type).toBe('plc-datatype')
       if (result.type === 'plc-datatype') {
         expect(result.meta.derivation).toBe('enumerated')
-        expect(result.structure).toEqual({ selectedRow: '-1', description: '' })
+        expect(result.structure).toEqual({ display: 'table', selectedRow: '-1', description: '' })
       }
     })
 
@@ -289,6 +289,13 @@ describe('tabs/utils', () => {
       const tab: TabsProps = { name: 'Srv', elementType: { type: 'server', protocol: 's7comm' } }
       const result = CreateEditorObjectFromTab(tab)
       expect(result.type).toBe('plc-server')
+    })
+
+    it('creates editor from user-management tab', () => {
+      const tab: TabsProps = { name: 'User Management', elementType: { type: 'user-management' } }
+      const result = CreateEditorObjectFromTab(tab)
+      expect(result.type).toBe('plc-user-management')
+      expect(result.meta.name).toBe('User Management')
     })
 
     it('creates editor from diff-viewer tab', () => {

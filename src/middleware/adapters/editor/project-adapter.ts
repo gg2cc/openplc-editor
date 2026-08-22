@@ -11,6 +11,7 @@
  */
 
 import { parseProjectFiles } from '../../../backend/shared/utils/parse-project-files'
+import { isDataTypeFilesEnabled } from '../../../frontend/utils/feature-flags'
 import type {
   CreatePouParams,
   CreateProjectParams,
@@ -202,6 +203,11 @@ export function createEditorProjectAdapter(): ProjectPort {
         raw.data.serverFiles,
         raw.data.remoteDeviceFiles,
         raw.data.libraryManifest,
+        // .dt files only feed the parser while the flag is on —
+        // off keeps legacy project.json as the source of truth.
+        // Array guard: the IPC payload is a cast, not validated — a
+        // version-skewed main process must not crash project open.
+        isDataTypeFilesEnabled() && Array.isArray(raw.data.dataTypeFiles) ? raw.data.dataTypeFiles : [],
       )
       return { success: true, data: parsed }
     },
@@ -221,6 +227,11 @@ export function createEditorProjectAdapter(): ProjectPort {
         raw.data.serverFiles,
         raw.data.remoteDeviceFiles,
         raw.data.libraryManifest,
+        // .dt files only feed the parser while the flag is on —
+        // off keeps legacy project.json as the source of truth.
+        // Array guard: the IPC payload is a cast, not validated — a
+        // version-skewed main process must not crash project open.
+        isDataTypeFilesEnabled() && Array.isArray(raw.data.dataTypeFiles) ? raw.data.dataTypeFiles : [],
       )
       return { success: true, data: parsed }
     },
@@ -331,6 +342,22 @@ export function createEditorProjectAdapter(): ProjectPort {
       return window.bridge.onFileExternalChange((_event: unknown, data: { filePath: string }) => {
         callback(data.filePath)
       })
+    },
+
+    async pickPlcopenImportFile(): Promise<{ success: boolean; content?: string; error?: string }> {
+      const response = await window.bridge.pickPlcopenImportFile()
+      if (!response.success) {
+        return { success: false, error: response.error?.description }
+      }
+      return { success: true, content: response.content }
+    },
+
+    async exportPlcopenFile(defaultFileName: string, xml: string): Promise<{ success: boolean; error?: string }> {
+      const response = await window.bridge.exportPlcopenFile(defaultFileName, xml)
+      if (!response.success) {
+        return { success: false, error: response.error?.description }
+      }
+      return { success: true }
     },
   }
 }

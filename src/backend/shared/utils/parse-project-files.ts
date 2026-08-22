@@ -8,6 +8,7 @@
  * The backend only reads raw files from disk; all parsing happens here.
  */
 
+import { parseDataTypeFromText } from '../../../frontend/utils/PLC/data-type-text-parser'
 import {
   detectLanguageFromExtension,
   findLastEndVarIndex,
@@ -79,6 +80,11 @@ export interface ParsedProjectData {
   devicePinMapping?: DevicePin[] | Record<string, DevicePin[]>
   /** Warnings collected during parsing (e.g. dropped files that failed validation). */
   warnings?: string[]
+  /** `datatypes/*.dt` files that failed to parse (or whose declared
+   *  name mismatched the file name).  Preserved raw so the save flow
+   *  can echo them back verbatim — an unreadable file must never be
+   *  silently dropped from disk. */
+  unparsedDataTypeFiles?: RawProjectFile[]
 }
 
 // ---------------------------------------------------------------------------
@@ -111,11 +117,16 @@ function getLanguageFromExt(relativePath: string): string | null {
 
 /**
  * Extract the base filename without extension from a relative path.
+ *
+ * Splits on BOTH separators: the desktop reader builds relative paths with
+ * `path.join`, which emits backslashes on Windows, so a `/`-only split would
+ * return the whole `pous\functions\Name` path as the "basename" — the origin of
+ * the POU name→path corruption in the "deleting function" bug.
  */
 function getBaseNameFromPath(relativePath: string): string {
   return (
     relativePath
-      .split('/')
+      .split(/[\\/]/)
       .pop()
       ?.replace(/\.\w+$/, '') ?? 'unknown'
   )
@@ -222,7 +233,42 @@ function createFallbackPou(content: string, language: string, pouType: string, p
  * On parse failure, falls back to createFallbackPou which preserves
  * documentation, raw variable text, and body content.
  */
-function parsePouFile(file: RawProjectFile): (PLCPou & { variablesText?: string }) | null {
+/**
+ * Migrate legacy variables from the two-field (`location` + `alias`) model to
+ * the single-field model, where `location` holds the binding itself — the
+ * alias name for an alias-bound variable, a literal `%addr` for a manual one.
+ *
+ * Any object that carries BOTH a string `location` and a non-empty string
+ * `alias` is a legacy alias-bound PLCVariable: its alias name is folded into
+ * `location` and the `alias` field dropped. Objects with `alias` but no
+ * `location` (producer channels: pins, VPP entries, Modbus points, EtherCAT
+ * mappings) keep their alias untouched. Manual variables (empty alias) keep
+ * their literal `location`.
+ *
+ * Generic, idempotent deep walk: projects already in the single-field form
+ * (no `alias` on variables) pass through unchanged, so it is safe to run on
+ * every load.
+ */
+function foldLegacyVariableAliases(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(foldLegacyVariableAliases)
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>
+    const isLegacyAliasBound = typeof obj.location === 'string' && typeof obj.alias === 'string' && obj.alias.length > 0
+    const out: Record<string, unknown> = {}
+    for (const [key, child] of Object.entries(obj)) {
+      if (isLegacyAliasBound && key === 'alias') continue // fold away
+      if (isLegacyAliasBound && key === 'location') {
+        out.location = obj.alias as string
+        continue
+      }
+      out[key] = foldLegacyVariableAliases(child)
+    }
+    return out
+  }
+  return value
+}
+
+function parsePouFile(file: RawProjectFile, warnings: string[]): (PLCPou & { variablesText?: string }) | null {
   const ext = file.relativePath.split('.').pop()?.toLowerCase()
   /* istanbul ignore if -- defensive: parseProjectFiles upstream only forwards files whose
      extension matched the POU file glob; an extension-less file path can never reach here */
@@ -233,7 +279,7 @@ function parsePouFile(file: RawProjectFile): (PLCPou & { variablesText?: string 
   // Legacy JSON format
   if (ext === 'json') {
     try {
-      const parsed = JSON.parse(file.content) as unknown
+      const parsed = foldLegacyVariableAliases(JSON.parse(file.content))
       // JSON POUs may be in the old discriminated union format: { type, data }
       if (parsed && typeof parsed === 'object' && 'type' in parsed && 'data' in parsed) {
         const ipcPou = parsed as { type: string; data: Record<string, unknown> }
@@ -268,9 +314,20 @@ function parsePouFile(file: RawProjectFile): (PLCPou & { variablesText?: string 
     }
   } catch (err) {
     console.error(`[parseProjectFiles] Failed to parse POU: ${file.relativePath}`, err)
+    const pouName = getBaseNameFromPath(file.relativePath)
+    const reason =
+      err instanceof Error ? err.message : /* istanbul ignore next -- every parser throw site uses Error */ String(err)
+    // Surface the failure on project open (the console panel shows these
+    // warnings) instead of silently loading the POU with no variables —
+    // GitHub issue #904. For textual POUs the raw declarations survive in
+    // `variablesText`, so point the user at the in-app repair path.
+    warnings.push(
+      language === 'st' || language === 'il'
+        ? `POU "${pouName}" (${file.relativePath}) could not be fully parsed: ${reason} Its variable declarations were preserved as raw text — open the POU's variables editor in code view, fix the declaration, and save.`
+        : `POU "${pouName}" (${file.relativePath}) could not be fully parsed and was loaded with partial data: ${reason}`,
+    )
     // Fallback: preserve as much data as possible
     try {
-      const pouName = getBaseNameFromPath(file.relativePath)
       return createFallbackPou(file.content, language, pouType, pouName)
     } catch (fallbackErr) {
       /* istanbul ignore next -- defensive: createFallbackPou itself is non-throwing for any
@@ -336,6 +393,9 @@ function deduplicatePouFiles(pouFiles: RawProjectFile[]): RawProjectFile[] {
  * @param pouFiles - Raw POU files (.st, .il, .ld, .fbd, .py, .cpp, .json)
  * @param serverFiles - Raw server config files from devices/servers/
  * @param remoteDeviceFiles - Raw remote device config files from devices/remote/
+ * @param libraryManifest - Raw content of library.json (library projects)
+ * @param dataTypeFiles - Raw datatypes/*.dt files; when any are present they
+ *   win over the legacy `project.json` `data.dataTypes` field
  */
 export function parseProjectFiles(
   projectPath: string,
@@ -346,13 +406,14 @@ export function parseProjectFiles(
   serverFiles: RawProjectFile[],
   remoteDeviceFiles: RawProjectFile[],
   libraryManifest: string = '',
+  dataTypeFiles: RawProjectFile[] = [],
 ): ParsedProjectData {
   const warnings: string[] = []
 
   // Parse and Zod-validate project.json (matches old backend safeParseProjectFile behavior)
   let project: { meta?: { name?: string; type?: string }; data?: Record<string, unknown> }
   try {
-    const raw = projectJson ? (JSON.parse(projectJson) as unknown) : null
+    const raw = projectJson ? foldLegacyVariableAliases(JSON.parse(projectJson)) : null
     if (raw) {
       const result = PLCProjectSchema.safeParse(raw)
       if (result.success) {
@@ -430,7 +491,7 @@ export function parseProjectFiles(
   // Parse POU files
   const pous: (PLCPou & { variablesText?: string })[] = []
   for (const file of filteredPouFiles) {
-    const pou = parsePouFile(file)
+    const pou = parsePouFile(file, warnings)
     if (pou) {
       // Ensure all POUs have a name (derive from filename if missing)
       if (!pou.name) {
@@ -474,6 +535,26 @@ export function parseProjectFiles(
     }
   }
 
+  // Parse data type files (datatypes/<Name>.dt).  Own loop — never
+  // through parsePouFile (pou-path detection throws for datatypes/).
+  // The declared name must match the file name; a mismatch or any
+  // parse failure preserves the raw file so the save flow writes it
+  // back verbatim instead of silently dropping it from disk.
+  const dataTypesFromFiles: PLCDataType[] = []
+  const unparsedDataTypeFiles: RawProjectFile[] = []
+  for (const file of dataTypeFiles) {
+    const expectedName = getBaseNameFromPath(file.relativePath)
+    const result = parseDataTypeFromText(file.content, expectedName)
+    if (result.dataType) {
+      dataTypesFromFiles.push(result.dataType)
+    } else {
+      warnings.push(
+        `Data type file "${file.relativePath}" could not be parsed and was preserved as-is: ${result.error ?? 'unknown error'}`,
+      )
+      unparsedDataTypeFiles.push(file)
+    }
+  }
+
   // Extract project data fields
   const data = project.data ?? {}
   const configuration = (data.configuration ??
@@ -501,7 +582,10 @@ export function parseProjectFiles(
   return {
     meta,
     projectData: {
-      dataTypes: (data.dataTypes as PLCDataType[]) ?? [],
+      // Migration rule: any .dt file present ⇒ the files are the
+      // source of truth; the legacy JSON field is only the fallback
+      // for projects that predate the format.
+      dataTypes: dataTypeFiles.length > 0 ? dataTypesFromFiles : ((data.dataTypes as PLCDataType[]) ?? []),
       pous,
       configurations: configuration,
       servers: servers.length > 0 ? servers : ((data.servers as PLCServer[]) ?? []),
@@ -523,5 +607,6 @@ export function parseProjectFiles(
     deviceConfiguration,
     devicePinMapping,
     warnings: warnings.length > 0 ? warnings : undefined,
+    ...(unparsedDataTypeFiles.length > 0 ? { unparsedDataTypeFiles } : {}),
   }
 }

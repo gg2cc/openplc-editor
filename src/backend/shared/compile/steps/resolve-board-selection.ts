@@ -63,6 +63,16 @@ export function resolveBoardSelection(resolver: BoardInfoResolver, boardTarget: 
       ...(boardInfo.extraArduinoLibraries && boardInfo.extraArduinoLibraries.length > 0
         ? { extra_libraries: boardInfo.extraArduinoLibraries }
         : {}),
+      // Prebuilt arduino-hal (mixed): the precompiled vendor library to link
+      // (2nd --library) + the ABI-locked core version to install/verify. Both
+      // come from the VPP manifest via BoardBuildInfo; absent for source boards.
+      ...(boardInfo.precompiledLibraryDir ? { precompiledLibraryDir: boardInfo.precompiledLibraryDir } : {}),
+      ...(boardInfo.coreVersion ? { coreVersion: boardInfo.coreVersion } : {}),
+      // Vendor board-manager index, so a core outside arduino-cli's built-in
+      // list can be auto-installed.  The resolver fills this from the VPP
+      // manifest's `target.boardManagerUrl` (or hals.json `board_manager_url`);
+      // dropping it here is what made every VPP-declared index dead data.
+      ...(boardInfo.boardManagerUrl ? { boardManagerUrl: boardInfo.boardManagerUrl } : {}),
       // Capability resolution inputs.  `resolveTargetCapabilities`
       // reads `compiler` + `vpp` + `capabilities` on whatever board
       // shape it's handed — without forwarding all three the

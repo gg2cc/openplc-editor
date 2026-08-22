@@ -3,12 +3,20 @@ import extract from 'extract-zip'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 
-import { PackageManifestSchema } from '../../../middleware/shared/ports/package-manifest-schema'
+import { APP_VERSION } from '../../../frontend/data/constants/app-version'
+import { isCompatibleEditorVersion } from '../../../frontend/utils/semver'
+import {
+  PackageManifestSchema,
+  parseInstalledPackageManifest,
+} from '../../../middleware/shared/ports/package-manifest-schema'
+import type { VppDeviceMatch } from '../../shared/hardware/find-vpp-device'
+import { findVppDeviceByBoardName } from '../../shared/hardware/find-vpp-device'
 import { validatePathId } from '../../shared/utils/path-safety'
 import { TRUSTED_PACKAGE_KEYS } from '../../shared/utils/vpp/trusted-keys'
 import { verifyPackageSignature } from '../../shared/utils/vpp/verify-package-signature'
+import { logger } from '../services/logger-service'
 import { assertPathContained } from '../utils/path-containment'
-import type { ImportResult, InstalledPackage, PackageManifest, PackageRegistry } from './types'
+import type { ImportResult, InstalledPackage, PackageIntegrityResult, PackageManifest, PackageRegistry } from './types'
 
 /**
  * Enforce cryptographic signature verification on every import. Strict by
@@ -78,6 +86,28 @@ class PackageManagerModule {
         }
       }
 
+      // Compatibility floor (DOPE-448). This is the ONLY place the editor
+      // enforces `minEditorVersion`, and it sits here because both entry paths
+      // — remote catalog install and the local "Add from file…" picker —
+      // converge on this method. The catalog UI's "Editor outdated" button
+      // state is a courtesy that stops the user earlier; it is not the gate,
+      // and before this check existed a `.vpp` dragged in from disk bypassed
+      // the constraint entirely.
+      //
+      // A package declares a floor when it needs an editor feature it cannot
+      // work without — a UI engine, a new screen widget, a layout the renderer
+      // learned in some release. Installing it on an older editor produces a
+      // board that renders wrong rather than an error, so refuse up front.
+      if (!isCompatibleEditorVersion(manifest.package.minEditorVersion, APP_VERSION)) {
+        return {
+          success: false,
+          error:
+            `Package "${manifest.package.name}" ${manifest.package.version} requires ` +
+            `OpenPLC Editor ${manifest.package.minEditorVersion} or newer. This editor is ${APP_VERSION}. ` +
+            `Update the editor, or install an older version of this package.`,
+        }
+      }
+
       // Validate package.id BEFORE using it as a path component. Without
       // this, a malicious .vpp with `"id": "../../something"` would have
       // `targetDir` resolve outside packagesDir and the rmSync below
@@ -130,6 +160,108 @@ class PackageManagerModule {
         rmSync(tempDir, { recursive: true, force: true })
       }
     }
+  }
+
+  /**
+   * Re-verify every registry-listed package against the trusted keys and remove
+   * any whose signature does not validate, returning the ids removed. For each
+   * failing entry the package directory is deleted (when its recorded path
+   * resolves inside packagesDir) and the registry entry is dropped, emitting a
+   * warning per removal. No-op when REQUIRE_SIGNATURE is false. Directories with
+   * no registry entry are not listed and are left as-is.
+   */
+  verifyInstalledSignatures(warn: (message: string) => void = (m) => logger.warn(m)): string[] {
+    if (!REQUIRE_SIGNATURE) return []
+
+    const registry = this.readRegistry()
+    const removed: string[] = []
+    let mutated = false
+
+    for (const [packageId, info] of Object.entries(registry.packages)) {
+      const reason = this.signatureRejectionReason(packageId, info?.path)
+      if (!reason) continue
+
+      // Drop the registry entry; delete on-disk contents only when the recorded
+      // path resolves inside packagesDir.
+      try {
+        assertPathContained(this.packagesDir, info.path, 'registry package path')
+        if (existsSync(info.path)) {
+          rmSync(info.path, { recursive: true, force: true })
+        }
+      } catch {
+        // Out-of-tree or unusable path: leave disk untouched, just de-list.
+      }
+
+      delete registry.packages[packageId]
+      mutated = true
+      removed.push(packageId)
+      warn(`VPP package "${packageId}" was removed at startup due to an invalid or missing signature: ${reason}`)
+    }
+
+    if (mutated) this.writeRegistry(registry)
+    return removed
+  }
+
+  /**
+   * Re-verify the package that provides `boardName`, at the moment a build is
+   * about to consume it (DOPE-539).
+   *
+   * The import check and the project-open sweep both happen strictly BEFORE
+   * this point, and nothing between them and the compile stops the user from
+   * editing the installed package: `getInstalledPackageManifest`, the HAL
+   * source, the licence-store backend and the runtime-v4 plugin payload are
+   * all read straight off `userData/packages/<id>/` when the build runs. So a
+   * package that passed on open is not evidence about the package being
+   * compiled — an edit lands in the firmware, or in C the runtime compiles on
+   * a live PLC, and (because `capabilities.isLicensable` is a manifest field)
+   * can switch the whole licensing flow off.
+   *
+   * This is the gate that actually protects a build, so it fails CLOSED and
+   * the callers refuse to compile. It deliberately does NOT de-list or delete
+   * the package the way the open-time sweep does: tearing a directory out from
+   * under a build in flight is a worse failure than stopping the build and
+   * saying why. The sweep still owns removal.
+   *
+   * A built-in hals.json board has no package behind it and is `ok` — the
+   * common case, and the reason this costs nothing for most builds.
+   */
+  verifyBoardPackageIntegrity(boardName: string): PackageIntegrityResult {
+    if (!REQUIRE_SIGNATURE) return { ok: true }
+
+    const match = this.findDeviceByBoardName(boardName)
+    if (!match) return { ok: true }
+
+    const reason = this.signatureRejectionReason(match.pkg.packageId, match.pkg.path)
+    if (!reason) return { ok: true }
+
+    return { ok: false, packageId: match.pkg.packageId, reason }
+  }
+
+  /**
+   * Returns null when the installed package recorded at `packagePath` is
+   * genuinely signed by a trusted key, or a short human-readable reason when it
+   * is not (bad id shape, path escaping packagesDir, missing files, or any
+   * failure surfaced by `verifyPackageSignature`).
+   */
+  private signatureRejectionReason(packageId: string, packagePath: string | undefined): string | null {
+    try {
+      validatePathId(packageId, 'registry package id')
+    } catch {
+      return 'invalid package id'
+    }
+    if (typeof packagePath !== 'string' || packagePath.length === 0) {
+      return 'registry entry has no package path'
+    }
+    try {
+      assertPathContained(this.packagesDir, packagePath, 'registry package path')
+    } catch {
+      return 'package path resolves outside the packages directory'
+    }
+    if (!existsSync(packagePath)) {
+      return 'package files are missing'
+    }
+    const verification = verifyPackageSignature(packagePath, TRUSTED_PACKAGE_KEYS)
+    return verification.valid ? null : (verification.error ?? 'invalid signature')
   }
 
   listInstalled(): InstalledPackage[] {
@@ -200,14 +332,51 @@ class PackageManagerModule {
     } catch {
       return null
     }
-    const parsed = PackageManifestSchema.safeParse(raw)
-    return parsed.success ? (parsed.data as unknown as PackageManifest) : null
+    // Read path, not the trust boundary: `importFromFile` above is where a
+    // manifest is refused. Here the package is already installed, and a
+    // manifest that was accepted by an older editor — one whose schema did
+    // not yet check the floor format (DOPE-448) — must keep resolving, or the
+    // boards it provides vanish from the board lookup with no message. An
+    // unreadable floor is dropped and logged; everything else still rejects.
+    return parseInstalledPackageManifest(raw)
   }
 
   getPackagePath(packageId: string): string | null {
     const registry = this.readRegistry()
     const pkg = registry.packages[packageId]
     return pkg?.path ?? null
+  }
+
+  /**
+   * The installed VPP device named `boardName`, with its package and
+   * manifest — or null when no installed package provides it.
+   *
+   * `boardTarget` travels through the compile pipeline as a device
+   * *name*, so every consumer that needs the package behind a board
+   * starts here. Delegates to the shared `findVppDeviceByBoardName` so
+   * this and `board-info-resolver` (which cannot import this module)
+   * resolve a board the same way.
+   */
+  findDeviceByBoardName(boardName: string): VppDeviceMatch | null {
+    return findVppDeviceByBoardName(this, boardName)
+  }
+
+  /**
+   * `package.minRuntimeVersion` of the installed package that provides
+   * `boardName`, or null when no installed package does, when the
+   * matching device is not a `runtime-v4` target, or when the package
+   * declares no floor (DOPE-448).
+   *
+   * Only runtime-v4 devices can carry a meaningful floor: their HAL is
+   * plugin code built against the runtime's API. An `arduino-cli`
+   * device never talks to the runtime, so a floor there would be a
+   * claim nothing can check — openplc-packages' `validate.ts` rejects
+   * it at authoring time, and this returns null if one slips through.
+   */
+  getRuntimeFloorForBoard(boardName: string): string | null {
+    const match = this.findDeviceByBoardName(boardName)
+    if (!match || match.device.target.type !== 'runtime-v4') return null
+    return match.manifest.package.minRuntimeVersion ?? null
   }
 
   private readRegistry(): PackageRegistry {
@@ -226,4 +395,21 @@ class PackageManagerModule {
   }
 }
 
-export { PackageManagerModule }
+/**
+ * The one wording every build-time integrity refusal uses.
+ *
+ * Three call sites in the compiler abort on the same condition, and the user
+ * reads exactly one of the three; they must not each explain it differently.
+ * The message names the package (what to reinstall), the reason (what is
+ * wrong) and the remedy, because "signature verification failed" on its own
+ * reads as an editor bug rather than as "the file on your disk changed".
+ */
+function formatPackageIntegrityError(boardName: string, failure: { packageId: string; reason: string }): string {
+  return (
+    `Board "${boardName}" is provided by the VPP package "${failure.packageId}", which no longer matches ` +
+    `its signature: ${failure.reason}. The package files appear to have been modified after installation, ` +
+    'so they cannot be trusted for a build. Reinstall the package from a trusted .vpp file and try again.'
+  )
+}
+
+export { formatPackageIntegrityError, PackageManagerModule }

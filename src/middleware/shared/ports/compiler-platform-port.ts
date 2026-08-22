@@ -2,17 +2,17 @@
  * Thin platform-bridge for the shared compile pipeline.
  *
  * The shared compile pipeline orchestrator (`backend/shared/compile/
- * pipeline.ts`) drives the full editor-canonical build flow — XML
- * generation, ST transpile, strucpp compile, conf authoring, defines
- * authoring, firmware-bundle composition, arduino-cli invocation,
- * runtime upload.  Every step is shared and pure EXCEPT for three
- * places that genuinely depend on the platform:
+ * pipeline.ts`) drives the full editor-canonical build flow — ST
+ * transpile, strucpp compile, conf authoring, defines authoring,
+ * firmware-bundle composition, arduino-cli invocation, runtime
+ * upload.  ST transpilation runs in-process on both platforms (the
+ * shared `st-transpiler/`); the only places that genuinely depend on
+ * the platform are:
  *
- *  1. `xml2st` transpile — editor spawns the bundled binary,
- *     web HTTP-POSTs to the centralised compiler-service backend.
- *  2. `arduino-cli` compile — editor spawns arduino-cli, web POSTs
- *     to the same backend (which spawns it server-side).
- *  3. Runtime upload — editor HTTPS-POSTs to the device's
+ *  1. `arduino-cli` compile — editor spawns arduino-cli, web POSTs
+ *     to the centralised compiler-service backend (which spawns it
+ *     server-side).
+ *  2. Runtime upload — editor HTTPS-POSTs to the device's
  *     `/api/upload`, web pipes through the orchestrator
  *     (WebRTC data channel with HTTP fallback).
  *
@@ -80,33 +80,13 @@ export type PlatformDeviceContext =
 // Per-method I/O contracts
 // ---------------------------------------------------------------------------
 
-/** `xml2st` input: a single XML string (the IEC 61131-3 PLC XML the
- *  shared `XmlGenerator` produces) plus an array of extra CLI tokens
- *  to append to the xml2st invocation.  Defined here (not on either
- *  adapter) because xml2st flag drift was the root cause of the
- *  initial cross-platform STRUCT bug — editor's local xml2st passed
- *  `--keep-structs` but the web's compile-service `/generate-st`
- *  endpoint hardcoded an unflagged invocation, so structs declared
- *  in the project compiled fine on the desktop and blew up on the
- *  web with `Undefined type 'MY_STRUCT'` errors out of strucpp.
- *  Pushing the flag set into a single shared field means any future
- *  xml2st option is a one-line pipeline change with no per-platform
- *  drift possible.
- *
- *  Editor's adapter passes `xml2stArgs` verbatim to the local
- *  binary (trusted).  Web's adapter filters against its own
- *  known-args allowlist before forwarding to the compile-service
- *  `/generate-st` endpoint, logging a warning for anything it
- *  doesn't recognise (defence in depth — service has its own
- *  allowlist too). */
 /**
  * Input to the in-process JSON → ST transpiler.  Each adapter
  * projects this into the transpiler's `TranspileProject` IR with
  * its own helper — editor: `fromSchemaShape` (IPC schema-shape);
  * web: `fromPortShape` after a port→schema conversion at the
- * adapter boundary.  Replaces the legacy XML-fed surface that
- * routed through a bundled `xml2st` binary; transpilation now
- * runs in-process against the JSON IR.
+ * adapter boundary.  Transpilation runs in-process against the
+ * JSON IR on both platforms.
  *
  * The declared type is port-shape because that's the renderer
  * store's shape; pipeline callers that hold schema-shape data
@@ -212,6 +192,21 @@ export interface InstallArduinoCoreArgs {
   /** Core identifier (e.g. `arduino:avr`).  Editor invokes
    *  `arduino-cli core install <id>`. */
   coreId: string
+  /** Optional exact core version (e.g. `1.8.8`).  When set, the editor runs
+   *  `core install <id>@<version>`, which installs exactly that version and
+   *  fails if it is unavailable — required for prebuilt arduino-hal boards
+   *  whose precompiled `.a` is ABI-locked to that core version. */
+  coreVersion?: string
+  /** Optional third-party board-manager index URL (e.g. a vendor's
+   *  `package_<vendor>_index.json`).  Sourced from the VPP manifest's
+   *  `target.boardManagerUrl` (or `board_manager_url` in hals.json) and
+   *  forwarded to arduino-cli as `--additional-urls`.
+   *
+   *  Cores outside arduino-cli's built-in index are invisible without it:
+   *  `core install industrialshields:esp32` fails with "Platform not found"
+   *  unless the vendor index is supplied AND `core update-index` has been
+   *  run against it.  The editor does both; web ignores this field. */
+  boardManagerUrl?: string
 }
 
 /** Arduino-CLI library install (editor-only.  Same no-op
@@ -251,6 +246,17 @@ export interface CheckRuntimeVersionResult {
    *  when the runtime is unreachable or doesn't expose the
    *  endpoint (very old v3 runtimes). */
   version: string | null
+  /**
+   * Oldest editor this runtime accepts programs from, declared at
+   * `GET /api/capabilities` (DOPE-448).  `null` means the runtime
+   * declares no floor — it predates the endpoint, or this platform
+   * has no transport for it.
+   *
+   * `null` is "no constraint", never "too old": every runtime
+   * currently deployed answers `null`, and the runtime only
+   * advertises this value — the editor is what compares and refuses.
+   */
+  minEditorVersion?: string | null
 }
 
 /** VPP (Vendor Plugin Package) runtime-v4 packaging.  Boards that
@@ -278,6 +284,23 @@ export interface PackageVppPluginResult {
    *  and return an empty record without errors. */
   files: Record<string, string>
   errors?: StructuredCompileError[]
+  /**
+   * `package.minRuntimeVersion` from the manifest of the VPP this
+   * board came from (DOPE-448) — the oldest runtime whose plugin API
+   * the package's HAL was built against.
+   *
+   * `null`/absent for non-VPP boards, for packages that declare no
+   * floor, and on platforms without VPP integration. The pipeline
+   * compares it against the connected runtime's reported version
+   * right after the version probe, which is the earliest point where
+   * both halves are known — a VPP plugin is built against a runtime
+   * API, so an older runtime loads it and fails at scan time, on a
+   * live PLC.
+   *
+   * This cannot be enforced at install time: the target device is
+   * unknown until the user connects to one.
+   */
+  minRuntimeVersion?: string | null
 }
 
 // ---------------------------------------------------------------------------

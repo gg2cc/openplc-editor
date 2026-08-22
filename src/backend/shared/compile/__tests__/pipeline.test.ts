@@ -5,7 +5,7 @@
  * methods.  Each branch (simulator / runtime v4 / runtime v3 /
  * arduino-direct, with `compileOnly` variants for each) is exercised
  * here by mocking the port + the heavy shared dependencies
- * (`runProgramBuildPipeline`, `XmlGenerator`).
+ * (`runProgramBuildPipeline`).
  * The actual content-authoring steps (defines, confs, composers) are
  * covered by their own unit tests; this suite focuses on the
  * orchestration — call ordering, branch dispatch, error propagation,
@@ -21,9 +21,6 @@ import type {
 
 // Mocks for heavy shared deps.  Use `jest.fn()` so individual tests
 // can override `.mockReturnValueOnce` / `.mockResolvedValueOnce`.
-jest.mock('../../utils/PLC/xml-generator', () => ({
-  XmlGenerator: jest.fn(),
-}))
 jest.mock('../../library/program-build-pipeline', () => ({
   runProgramBuildPipeline: jest.fn(),
 }))
@@ -43,6 +40,17 @@ jest.mock('../../firmware/runtime-version-gate', () => ({
   describeIncompatibleRuntime: jest.fn(
     (v: string | null) => `Runtime ${String(v)} is too old; please upgrade to 4.1.0+.`,
   ),
+  // The two DOPE-448 message builders. Only the message text is stubbed —
+  // the *decisions* are made by `isVersionAtLeast` from
+  // `frontend/utils/semver`, which is deliberately NOT mocked so these tests
+  // exercise the real comparison.
+  describeEditorTooOldForRuntime: jest.fn(
+    (a: { minEditorVersion: string }) => `This editor is older than the runtime requires (${a.minEditorVersion}).`,
+  ),
+  describeVppRuntimeMismatch: jest.fn(
+    (a: { boardTarget: string; minRuntimeVersion: string }) =>
+      `Board "${a.boardTarget}" needs runtime ${a.minRuntimeVersion} or newer.`,
+  ),
 }))
 // Mock the conf-generator step so tests can deterministically force
 // the runtime-v4 confs branch to throw (covers the pipeline's outer
@@ -59,14 +67,12 @@ jest.mock('../steps/generate-confs', () => ({
   })),
 }))
 
-import { XmlGenerator } from '../../utils/PLC/xml-generator'
 import { runProgramBuildPipeline } from '../../library/program-build-pipeline'
 import { isStrucppCompatibleRuntime } from '../../firmware/runtime-version-gate'
 import { generateRuntimeConfs } from '../steps/generate-confs'
 
 import { runCompilePipeline, type RunCompilePipelineArgs, type PipelineProgressEvent } from '../pipeline'
 
-const mockedXmlGen = XmlGenerator as jest.MockedFunction<typeof XmlGenerator>
 const mockedConfs = generateRuntimeConfs as jest.MockedFunction<typeof generateRuntimeConfs>
 const mockedStrucpp = runProgramBuildPipeline as jest.MockedFunction<typeof runProgramBuildPipeline>
 const mockedVersionGate = isStrucppCompatibleRuntime as jest.MockedFunction<typeof isStrucppCompatibleRuntime>
@@ -78,7 +84,7 @@ const mockedVersionGate = isStrucppCompatibleRuntime as jest.MockedFunction<type
 function makePort(overrides: Partial<CompilerPlatformPort> = {}): jest.Mocked<CompilerPlatformPort> {
   return {
     computeMd5: jest.fn().mockResolvedValue('a'.repeat(32)),
-    transpileXmlToSt: jest.fn().mockResolvedValue({ ok: true, programSt: 'PROGRAM main\nEND_PROGRAM' }),
+    transpileToSt: jest.fn().mockResolvedValue({ ok: true, programSt: 'PROGRAM main\nEND_PROGRAM' }),
     installArduinoCore: jest.fn().mockResolvedValue({ ok: true }),
     installArduinoLib: jest.fn().mockResolvedValue({ ok: true }),
     compileArduino: jest.fn().mockResolvedValue({ ok: true, binary: new Uint8Array([1, 2, 3]) }),
@@ -136,8 +142,6 @@ function captureEvents() {
 
 beforeEach(() => {
   jest.clearAllMocks()
-  // Default-mock: XML generation succeeds.
-  mockedXmlGen.mockReturnValue({ ok: true, data: '<plc/>', message: 'ok' } as never)
   // Default-mock: strucpp succeeds with empty file map.
   mockedStrucpp.mockReturnValue({
     success: true,
@@ -166,14 +170,11 @@ describe('runCompilePipeline — simulator path', () => {
     expect(result.success).toBe(true)
     expect(result.binary).toBeInstanceOf(Uint8Array)
     expect(result.uploaded).toBe(false)
-    expect(port.transpileXmlToSt).toHaveBeenCalledTimes(1)
-    // The pipeline owns xml2st flag semantics: every strucpp target
-    // gets `xml2stArgs: ['--keep-structs']`.  Regression guard for
-    // the editor/web STRUCT drift bug — see compiler-platform-port.ts
-    // comment.  Future flags get added to this array, not to a
-    // typed boolean on the port (the port stays format-agnostic).
-    expect(port.transpileXmlToSt).toHaveBeenCalledWith(
-      expect.objectContaining({ xml2stArgs: ['--keep-structs'] }),
+    expect(port.transpileToSt).toHaveBeenCalledTimes(1)
+    // The pipeline hands the in-process transpiler the project IR plus
+    // a log callback — no XML / transpiler flags flow through anymore.
+    expect(port.transpileToSt).toHaveBeenCalledWith(
+      expect.objectContaining({ projectData: expect.anything() }),
       expect.any(Function),
     )
     expect(port.compileArduino).toHaveBeenCalledTimes(1)
@@ -196,6 +197,42 @@ describe('runCompilePipeline — simulator path', () => {
     expect(callArgs.files['examples/Baremetal/Baremetal.ino']).toBe('INO')
     expect(callArgs.files['src/defines.h']).toContain('PROGRAM_MD5')
     expect(callArgs.argv).toEqual(['compile', '-b', 'arduino:avr:mega'])
+  })
+
+  // Regression: the board's `boardManagerUrl` (VPP `target.boardManagerUrl`)
+  // was resolved onto boardEntry but never forwarded to installArduinoCore,
+  // so vendor cores outside arduino-cli's built-in index could not be
+  // installed — "Platform 'industrialshields:esp32' not found".
+  it('forwards boardEntry.boardManagerUrl to installArduinoCore', async () => {
+    const port = makePort()
+    const { emit } = captureEvents()
+    const boardManagerUrl =
+      'https://apps.industrialshields.com/main/arduino/boards/package_industrialshields_index.json'
+    await runCompilePipeline(
+      makeArgs({
+        isSimulator: false,
+        boardRuntime: 'arduino-cli',
+        boardEntry: {
+          platform: 'industrialshields:esp32:esp32plc',
+          core: 'industrialshields:esp32',
+          boardManagerUrl,
+        },
+      }),
+      port,
+      emit,
+    )
+    expect(port.installArduinoCore).toHaveBeenCalledWith(
+      expect.objectContaining({ coreId: 'industrialshields:esp32', boardManagerUrl }),
+      expect.any(Function),
+    )
+  })
+
+  it('omits boardManagerUrl for boards that do not declare one', async () => {
+    const port = makePort()
+    const { emit } = captureEvents()
+    await runCompilePipeline(makeArgs({ isSimulator: false, boardRuntime: 'arduino-cli' }), port, emit)
+    const [coreArgs] = port.installArduinoCore.mock.calls[0]
+    expect(coreArgs).not.toHaveProperty('boardManagerUrl')
   })
 
   it('calls installArduinoCore + installArduinoLib before compileArduino (no-op semantics for web)', async () => {
@@ -272,9 +309,8 @@ describe('runCompilePipeline — blank FBD variable guard', () => {
     const result = await runCompilePipeline(makeArgs({ projectData }), port, emit)
 
     expect(result.success).toBe(false)
-    // Validation runs before XML generation / xml2st.
-    expect(mockedXmlGen).not.toHaveBeenCalled()
-    expect(port.transpileXmlToSt).not.toHaveBeenCalled()
+    // Validation runs before transpilation.
+    expect(port.transpileToSt).not.toHaveBeenCalled()
     // The user-facing error names the POU and the kind of block.
     const validateError = events.find((e) => e.stage === 'validate' && e.level === 'error')
     expect(validateError?.message).toContain('POU "main"')
@@ -388,6 +424,122 @@ describe('runCompilePipeline — runtime v4 path', () => {
     expect(result.success).toBe(false)
     expect(port.uploadRuntimeV4).not.toHaveBeenCalled()
     expect(events.some((e) => /too old|upgrade/i.test(e.message))).toBe(true)
+  })
+
+  // -------------------------------------------------------------------------
+  // DOPE-448: the two floors the runtime and the VPP declare
+  // -------------------------------------------------------------------------
+
+  const v4Args = (overrides: Partial<RunCompilePipelineArgs> = {}) =>
+    makeArgs({
+      isSimulator: false,
+      isRuntimeV4: true,
+      boardRuntime: 'openplc-compiler',
+      deviceContext: deviceContextFixture,
+      // The host app injects its own version; `4.2.0` is low enough to be
+      // refused by the floors below and high enough to clear the passing ones.
+      editorVersion: '4.2.0',
+      ...overrides,
+    })
+
+  it('aborts when the runtime declares a minEditorVersion above this editor', async () => {
+    const port = makePort({
+      checkRuntimeVersion: jest.fn().mockResolvedValue({
+        ok: true,
+        version: 'v4.2.0',
+        minEditorVersion: '4.2.1',
+      }),
+    })
+    const { events, emit } = captureEvents()
+    const result = await runCompilePipeline(v4Args(), port, emit)
+
+    expect(result.success).toBe(false)
+    expect(port.uploadRuntimeV4).not.toHaveBeenCalled()
+    expect(events.some((e) => /older than the runtime requires \(4\.2\.1\)/.test(e.message))).toBe(true)
+  })
+
+  // The second, independent way the gate stays inert: a caller that never
+  // opts in. Web passes no `editorVersion` until its adapter wires one up,
+  // and must keep uploading.
+  it('uploads when the caller passes no editorVersion, even against a declared floor', async () => {
+    const port = makePort({
+      checkRuntimeVersion: jest.fn().mockResolvedValue({ ok: true, version: 'v4.2.0', minEditorVersion: '99.0.0' }),
+    })
+    const { emit } = captureEvents()
+    const result = await runCompilePipeline(v4Args({ editorVersion: undefined }), port, emit)
+
+    expect(result.success).toBe(true)
+    expect(port.uploadRuntimeV4).toHaveBeenCalledTimes(1)
+  })
+
+  // This is every runtime currently in the field: it answers /api/version
+  // only, so no floor reaches the pipeline. The gate must be completely
+  // inert for them — that is what makes shipping this safe.
+  const NO_FLOOR_DECLARED: Array<[string | null | undefined, string]> = [
+    [undefined, 'the field is absent (runtime predates /api/capabilities)'],
+    [null, 'the runtime declares no floor'],
+  ]
+
+  it.each(NO_FLOOR_DECLARED)('uploads normally when minEditorVersion is %p — %s', async (minEditorVersion) => {
+    const port = makePort({
+      checkRuntimeVersion: jest.fn().mockResolvedValue({ ok: true, version: 'v4.1.7', minEditorVersion }),
+    })
+    const { emit } = captureEvents()
+    const result = await runCompilePipeline(v4Args(), port, emit)
+
+    expect(result.success).toBe(true)
+    expect(result.uploaded).toBe(true)
+    expect(port.uploadRuntimeV4).toHaveBeenCalledTimes(1)
+  })
+
+  it('uploads when this editor satisfies the runtime-declared floor', async () => {
+    const port = makePort({
+      checkRuntimeVersion: jest.fn().mockResolvedValue({ ok: true, version: 'v4.2.0', minEditorVersion: '1.0.0' }),
+    })
+    const { emit } = captureEvents()
+    const result = await runCompilePipeline(v4Args(), port, emit)
+
+    expect(result.success).toBe(true)
+    expect(port.uploadRuntimeV4).toHaveBeenCalledTimes(1)
+  })
+
+  it('aborts when the VPP requires a newer runtime than the device reports', async () => {
+    const port = makePort({
+      checkRuntimeVersion: jest.fn().mockResolvedValue({ ok: true, version: 'v4.1.7' }),
+      packageVppPlugin: jest.fn().mockResolvedValue({ files: {}, minRuntimeVersion: '4.1.9' }),
+    })
+    const { events, emit } = captureEvents()
+    const result = await runCompilePipeline(v4Args(), port, emit)
+
+    expect(result.success).toBe(false)
+    // Blocked BEFORE the upload: the failure this prevents is a vendor plugin
+    // that loads on a live PLC and dies at scan time.
+    expect(port.uploadRuntimeV4).not.toHaveBeenCalled()
+    expect(events.some((e) => /needs runtime 4\.1\.9 or newer/.test(e.message))).toBe(true)
+  })
+
+  it('uploads when the runtime satisfies the VPP floor', async () => {
+    const port = makePort({
+      checkRuntimeVersion: jest.fn().mockResolvedValue({ ok: true, version: 'v4.2.0' }),
+      packageVppPlugin: jest.fn().mockResolvedValue({ files: {}, minRuntimeVersion: '4.1.9' }),
+    })
+    const { emit } = captureEvents()
+    const result = await runCompilePipeline(v4Args(), port, emit)
+
+    expect(result.success).toBe(true)
+    expect(port.uploadRuntimeV4).toHaveBeenCalledTimes(1)
+  })
+
+  it('uploads when the board is not from a VPP (no floor declared)', async () => {
+    const port = makePort({
+      checkRuntimeVersion: jest.fn().mockResolvedValue({ ok: true, version: 'v4.1.7' }),
+      packageVppPlugin: jest.fn().mockResolvedValue({ files: {}, minRuntimeVersion: null }),
+    })
+    const { emit } = captureEvents()
+    const result = await runCompilePipeline(v4Args(), port, emit)
+
+    expect(result.success).toBe(true)
+    expect(port.uploadRuntimeV4).toHaveBeenCalledTimes(1)
   })
 
   it('compileOnly on v4 returns success without invoking checkRuntimeVersion or uploadRuntimeV4', async () => {
@@ -771,19 +923,9 @@ describe('runCompilePipeline — boardEntry shape variants', () => {
 // ---------------------------------------------------------------------------
 
 describe('runCompilePipeline — failure propagation', () => {
-  it('returns success=false when XmlGenerator reports failure', async () => {
-    mockedXmlGen.mockReturnValueOnce({ ok: false, data: undefined, message: 'malformed pou' } as never)
-    const port = makePort()
-    const { events, emit } = captureEvents()
-    const result = await runCompilePipeline(makeArgs(), port, emit)
-    expect(result.success).toBe(false)
-    expect(events.some((e) => e.stage === 'xml' && /malformed pou/.test(e.message))).toBe(true)
-    expect(port.transpileXmlToSt).not.toHaveBeenCalled()
-  })
-
-  it('returns success=false when transpileXmlToSt reports failure', async () => {
+  it('returns success=false when transpileToSt reports failure', async () => {
     const port = makePort({
-      transpileXmlToSt: jest.fn().mockResolvedValue({
+      transpileToSt: jest.fn().mockResolvedValue({
         ok: false,
         errors: [{ message: 'bad xml', line: 1, column: 1, severity: 'error' }],
       }),
@@ -826,6 +968,17 @@ describe('runCompilePipeline — failure propagation', () => {
     const { emit } = captureEvents()
     const result = await runCompilePipeline(makeArgs(), port, emit)
     expect(result.success).toBe(false)
+  })
+
+  it('returns success=false when a simulator build produces no .hex binary', async () => {
+    // Simulator targets require the .hex artefact in memory (the loader can't
+    // find it on disk). A compile that reports ok but omits `binary` must fail
+    // with a precise error rather than silently succeeding.
+    const port = makePort({ compileArduino: jest.fn().mockResolvedValue({ ok: true }) })
+    const { events, emit } = captureEvents()
+    const result = await runCompilePipeline(makeArgs(), port, emit)
+    expect(result.success).toBe(false)
+    expect(events.some((e) => e.stage === 'arduino-compile' && /did not produce a \.hex/.test(e.message))).toBe(true)
   })
 
   it('returns success=false when uploadRuntimeV4 reports failure', async () => {
@@ -945,7 +1098,7 @@ describe('runCompilePipeline — side effects', () => {
 
   it('emits per-error events with structured compileError payloads on transpile failure', async () => {
     const port = makePort({
-      transpileXmlToSt: jest.fn().mockResolvedValue({
+      transpileToSt: jest.fn().mockResolvedValue({
         ok: false,
         errors: [
           { message: 'bad syntax', line: 5, column: 3, severity: 'error' },
@@ -1048,16 +1201,16 @@ describe('runCompilePipeline — side effects', () => {
     // ports with `vi.fn()` never invoke the callback, leaving the
     // lambda body uncovered — this test pins the wiring explicitly.
     const port = makePort({
-      transpileXmlToSt: jest.fn().mockImplementation(async (_args, log) => {
-        log('xml2st spawned subprocess', 'info')
-        log('xml2st: parsed 5 POUs', 'info')
+      transpileToSt: jest.fn().mockImplementation(async (_args, log) => {
+        log('transpiler started', 'info')
+        log('transpiler: parsed 5 POUs', 'info')
         return { ok: true, programSt: 'PROGRAM main\nEND_PROGRAM' }
       }),
     })
     const { events, emit } = captureEvents()
     await runCompilePipeline(makeArgs(), port, emit)
     const stEvents = events.filter((e) => e.stage === 'st')
-    expect(stEvents.some((e) => e.message === 'xml2st spawned subprocess' && e.level === 'info')).toBe(true)
-    expect(stEvents.some((e) => e.message === 'xml2st: parsed 5 POUs' && e.level === 'info')).toBe(true)
+    expect(stEvents.some((e) => e.message === 'transpiler started' && e.level === 'info')).toBe(true)
+    expect(stEvents.some((e) => e.message === 'transpiler: parsed 5 POUs' && e.level === 'info')).toBe(true)
   })
 })

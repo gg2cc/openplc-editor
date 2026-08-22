@@ -1,8 +1,9 @@
 /**
  * @jest-environment jsdom
  */
-import type { PLCPou } from '../../../../middleware/shared/ports/types'
+import type { PLCDataType, PLCPou } from '../../../../middleware/shared/ports/types'
 import { openPLCStoreBase } from '../../../store'
+import * as featureFlags from '../../../utils/feature-flags'
 import { setBodyLineOffset } from '../../lsp-shared/body-offsets'
 import { redirectDefinitionToStore } from '../goto-definition-redirect'
 
@@ -35,6 +36,7 @@ function setProjectPous(pous: PLCPou[]) {
         ...s.project.data,
         pous,
         dataTypes: [],
+        remoteDevices: [],
       },
     },
     editor: { type: 'available', meta: { name: 'available' } },
@@ -59,6 +61,87 @@ describe('redirectDefinitionToStore', () => {
         range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
       }),
     ).toBe(false)
+  })
+
+  describe('datatypes URI with data types present', () => {
+    // Aggregate doc: line 0 `TYPE`, 1 `Colors : (...)`, then Motor's
+    // STRUCT spans 2..4 (declaration, one field, END_STRUCT).
+    const dataTypes: PLCDataType[] = [
+      { name: 'Colors', derivation: 'enumerated', values: [{ description: 'RED' }], initialValue: '' },
+      {
+        name: 'Motor',
+        derivation: 'structure',
+        variable: [{ name: 'speed', type: { definition: 'base-type', value: 'INT' } }],
+      },
+    ]
+
+    beforeEach(() => {
+      setProjectPous([])
+      openPLCStoreBase.setState((s) => ({
+        ...s,
+        project: { ...s.project, data: { ...s.project.data, dataTypes } },
+      }))
+      jest.spyOn(featureFlags, 'isDataTypeFilesEnabled').mockReturnValue(true)
+    })
+
+    afterEach(() => {
+      jest.restoreAllMocks()
+    })
+
+    it('opens the owning type in code mode with the cursor on its declaration line', () => {
+      expect(
+        redirectDefinitionToStore({
+          uri: 'inmemory://datatypes/__project__.st',
+          range: { start: { line: 1, character: 2 }, end: { line: 1, character: 8 } },
+        }),
+      ).toBe(true)
+
+      const state = openPLCStoreBase.getState()
+      expect(state.selectedTab).toBe('Colors')
+      // The active editor holds the fresh model — `updateModelStructureForName`
+      // writes there when the name matches, leaving `editors[]` behind.
+      const model = state.editor
+      expect(model.type === 'plc-datatype' && model.structure.display).toBe('code')
+      // Entry line 0 sits below the view's own `TYPE` frame → Monaco line 2.
+      expect(model.cursorPosition).toEqual({ lineNumber: 2, column: 3, offset: 0, target: 'data-type' })
+    })
+
+    it('lands on a struct field line inside the owning type', () => {
+      // Aggregate line 3 = Motor's `speed` field (entry starts at 2).
+      expect(
+        redirectDefinitionToStore({
+          uri: 'inmemory://datatypes/__project__.st',
+          range: { start: { line: 3, character: 4 }, end: { line: 3, character: 9 } },
+        }),
+      ).toBe(true)
+
+      const state = openPLCStoreBase.getState()
+      expect(state.selectedTab).toBe('Motor')
+      expect(state.editor.cursorPosition?.lineNumber).toBe(3)
+    })
+
+    it('returns false for the END_TYPE framing line past the last entry', () => {
+      expect(
+        redirectDefinitionToStore({
+          uri: 'inmemory://datatypes/__project__.st',
+          range: { start: { line: 5, character: 0 }, end: { line: 5, character: 0 } },
+        }),
+      ).toBe(false)
+    })
+
+    it('opens the form tab without a cursor when the code view is not built in', () => {
+      jest.spyOn(featureFlags, 'isDataTypeFilesEnabled').mockReturnValue(false)
+      expect(
+        redirectDefinitionToStore({
+          uri: 'inmemory://datatypes/__project__.st',
+          range: { start: { line: 1, character: 0 }, end: { line: 1, character: 0 } },
+        }),
+      ).toBe(true)
+
+      const model = openPLCStoreBase.getState().editor
+      expect(model.type === 'plc-datatype' && model.structure.display).toBe('table')
+      expect(model.cursorPosition).toBeUndefined()
+    })
   })
 
   it('returns false when the target POU does not exist in the project', () => {
@@ -185,5 +268,85 @@ describe('redirectDefinitionToStore', () => {
     if (state.editor.type === 'plc-textual') {
       expect(state.editor.variable.display).toBe('table')
     }
+  })
+
+  it('redirects a SoftMotion axis global to the owning drive editor', () => {
+    // Minimal CiA 402 drive: controlWord (0x6040 out) + statusWord (0x6041 in)
+    // mapped, so collectAxes/softMotionAxisNames recognise it as an axis.
+    openPLCStoreBase.setState((s) => ({
+      ...s,
+      project: {
+        ...s.project,
+        data: {
+          ...s.project.data,
+          pous: [],
+          dataTypes: [],
+          remoteDevices: [
+            {
+              name: 'eth',
+              protocol: 'ethercat',
+              ethercatConfig: {
+                devices: [
+                  {
+                    id: 'd1',
+                    name: 'My_Axis',
+                    cia402: { enabled: true, scaleNum: 1, scaleDenom: 1, scaleFactor: 1 },
+                    channelInfo: [
+                      { channelId: 'c1', entryIndex: '0x6040', direction: 'output', iecType: 'UINT' },
+                      { channelId: 'c2', entryIndex: '0x6041', direction: 'input', iecType: 'UINT' },
+                    ],
+                    channelMappings: [
+                      { channelId: 'c1', iecLocation: '%QW0', alias: '' },
+                      { channelId: 'c2', iecLocation: '%IW0', alias: '' },
+                    ],
+                  },
+                ],
+              },
+            },
+          ],
+        } as never,
+      },
+      editor: { type: 'available', meta: { name: 'available' } },
+      editors: [],
+      tabs: [],
+      selectedTab: null,
+    }))
+
+    // Line 0 of the globals doc is `VAR_GLOBAL`; line 1 is the first axis.
+    const handled = redirectDefinitionToStore({
+      uri: 'inmemory://softmotion/__axes__.st',
+      range: { start: { line: 1, character: 2 }, end: { line: 1, character: 9 } },
+    })
+
+    expect(handled).toBe(true)
+    const state = openPLCStoreBase.getState()
+    expect(state.editor.type).toBe('plc-ethercat-device')
+    expect(state.editor.meta.name).toBe('My_Axis')
+    if (state.editor.type === 'plc-ethercat-device') {
+      expect(state.editor.meta.busName).toBe('eth')
+      expect(state.editor.meta.deviceId).toBe('d1')
+    }
+  })
+
+  it('redirects a resource-global to the Resource editor', () => {
+    setProjectPous([])
+    const handled = redirectDefinitionToStore({
+      uri: 'inmemory://globals/__resource__.st',
+      range: { start: { line: 2, character: 4 }, end: { line: 2, character: 15 } },
+    })
+    expect(handled).toBe(true)
+    const state = openPLCStoreBase.getState()
+    expect(state.editor.type).toBe('plc-resource')
+    expect(state.editor.meta.name).toBe('Resource')
+  })
+
+  it('returns false for a SoftMotion globals line with no matching axis', () => {
+    setProjectPous([])
+    expect(
+      redirectDefinitionToStore({
+        uri: 'inmemory://softmotion/__axes__.st',
+        range: { start: { line: 1, character: 0 }, end: { line: 1, character: 0 } },
+      }),
+    ).toBe(false)
   })
 })

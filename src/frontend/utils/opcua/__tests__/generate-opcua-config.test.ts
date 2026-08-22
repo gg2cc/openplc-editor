@@ -6,7 +6,7 @@ import type {
   PLCServer,
 } from '@root/middleware/shared/ports/open-plc-types'
 
-import { generateOpcUaConfig, validateOpcUaConfig } from '../generate-opcua-config'
+import { generateOpcUaConfig, OPCUA_CONFIG_FORMAT_VERSION, validateOpcUaConfig } from '../generate-opcua-config'
 import { OpcUaConfigError } from '../resolve-indices'
 import * as resolveIndices from '../resolve-indices'
 import type { PLCInstanceInfo } from '../types'
@@ -145,6 +145,35 @@ describe('generateOpcUaConfig', () => {
     const parsed = JSON.parse(json) as Array<{ config: { server: { endpoint_url: string; application_uri: string } } }>
     expect(parsed[0].config.server.endpoint_url).toBe('opc.tcp://0.0.0.0:4840/openplc')
     expect(parsed[0].config.server.application_uri).toBe('urn:test:server')
+  })
+
+  it('stamps the contract format_version so the runtime can gate old configs', () => {
+    const cfg = baseServerConfig()
+    const json = generateOpcUaConfig([makePLCServer(cfg)], debugMapJson([]), [])!
+    const parsed = JSON.parse(json) as Array<{ config: { format_version: number } }>
+    expect(parsed[0].config.format_version).toBe(OPCUA_CONFIG_FORMAT_VERSION)
+  })
+
+  it('emits canonical datatype + size for a simple variable from the debug map (not the stored type)', () => {
+    const cfg = baseServerConfig()
+    // Stored variableType is INT, but the compiler says the leaf is a
+    // 4-byte DINT — the runtime must encode 4 bytes, so the emitted
+    // datatype/size come from the debug map, not the stored type.
+    cfg.addressSpace.nodes = [makeNode({ pouName: 'GVL', variablePath: 'COUNTER', variableType: 'INT' })]
+    const json = generateOpcUaConfig(
+      [makePLCServer(cfg)],
+      debugMapJson([{ path: 'COUNTER', type: 'DINT', arr: 0, elem: 1, size: 4 }]),
+      [],
+    )!
+    const parsed = JSON.parse(json) as Array<{
+      config: { address_space: { variables: Array<{ datatype: string; size: number; arr: number; elem: number }> } }
+    }>
+    expect(parsed[0].config.address_space.variables[0]).toMatchObject({
+      datatype: 'DINT',
+      size: 4,
+      arr: 0,
+      elem: 1,
+    })
   })
 
   it('filters disabled security profiles', () => {
@@ -347,28 +376,28 @@ describe('generateOpcUaConfig', () => {
     expect(parsed[0].config.address_space.arrays[0].datatype).toBe('REAL')
   })
 
-  it('returns original variableType when no OF pattern found', () => {
+  it('uses the canonical element type/size from the debug map, ignoring the stored variableType', () => {
     const cfg = baseServerConfig()
     cfg.addressSpace.nodes = [
       makeNode({
         nodeType: 'array',
         variablePath: 'WEIRD',
-        variableType: 'WEIRD_TYPE',
+        variableType: 'WEIRD_TYPE', // stored type is bogus — must be ignored
         arrayLength: 1,
       }),
     ]
     const json = generateOpcUaConfig(
       [makePLCServer(cfg)],
-      debugMapJson([{ path: 'INSTANCE0.WEIRD[0]', type: 'INT', arr: 0, elem: 1 }]),
+      debugMapJson([{ path: 'INSTANCE0.WEIRD[0]', type: 'DINT', arr: 0, elem: 1, size: 4 }]),
       instances,
     )!
     const parsed = JSON.parse(json) as Array<{
-      config: { address_space: { arrays: Array<{ datatype: string }> } }
+      config: { address_space: { arrays: Array<{ datatype: string; size: number }> } }
     }>
-    expect(parsed[0].config.address_space.arrays[0].datatype).toBe('WEIRD_TYPE')
+    expect(parsed[0].config.address_space.arrays[0]).toMatchObject({ datatype: 'DINT', size: 4 })
   })
 
-  it('uses UNKNOWN when no elementType and variableType is empty', () => {
+  it('uses the canonical element type even when the stored variableType is empty', () => {
     const cfg = baseServerConfig()
     cfg.addressSpace.nodes = [
       makeNode({
@@ -380,13 +409,13 @@ describe('generateOpcUaConfig', () => {
     ]
     const json = generateOpcUaConfig(
       [makePLCServer(cfg)],
-      debugMapJson([{ path: 'INSTANCE0.A[0]', type: 'INT', arr: 0, elem: 0 }]),
+      debugMapJson([{ path: 'INSTANCE0.A[0]', type: 'INT', arr: 0, elem: 0, size: 2 }]),
       instances,
     )!
     const parsed = JSON.parse(json) as Array<{
-      config: { address_space: { arrays: Array<{ datatype: string }> } }
+      config: { address_space: { arrays: Array<{ datatype: string; size: number }> } }
     }>
-    expect(parsed[0].config.address_space.arrays[0].datatype).toBe('UNKNOWN')
+    expect(parsed[0].config.address_space.arrays[0]).toMatchObject({ datatype: 'INT', size: 2 })
   })
 
   it('defaults arrayLength to 1 when not set', () => {
@@ -428,6 +457,85 @@ describe('generateOpcUaConfig', () => {
     // Promotes from arrays[] to structures[] when fields are present
     expect(parsed[0].config.address_space.structures.length).toBe(1)
     expect(parsed[0].config.address_space.arrays.length).toBe(0)
+  })
+
+  // Regression: openplc-editor#745 — an ARRAY OF <user-defined type> has
+  // no leaf of its own in the debug map, and the variable picker only
+  // pre-expands the elements into `fields` for small 1-D arrays. A bigger
+  // (or multi-dimensional) UDT array therefore arrived here as a bare
+  // `array` node and failed the whole build with "Cannot resolve OPC-UA
+  // array address" on compile+download.
+  it('publishes an array of a UDT as a structure even without stored fields', () => {
+    const cfg = baseServerConfig()
+    cfg.addressSpace.nodes = [
+      makeNode({
+        nodeType: 'array',
+        variablePath: 'TANKS',
+        variableType: 'ARRAY[1..2] OF TANK',
+        elementType: 'TANK',
+        arrayLength: 2,
+        fields: [], // picker skipped expansion → no fields saved
+      }),
+    ]
+    const json = generateOpcUaConfig(
+      [makePLCServer(cfg)],
+      debugMapJson([
+        { path: 'INSTANCE0.TANKS[1].LEVEL', type: 'INT', arr: 0, elem: 20 },
+        { path: 'INSTANCE0.TANKS[1].FLOW', type: 'DINT', arr: 0, elem: 21, size: 4 },
+        { path: 'INSTANCE0.TANKS[2].LEVEL', type: 'INT', arr: 0, elem: 22 },
+        { path: 'INSTANCE0.TANKS[2].FLOW', type: 'DINT', arr: 0, elem: 23, size: 4 },
+      ]),
+      instances,
+    )!
+    const parsed = JSON.parse(json) as Array<{
+      config: {
+        address_space: {
+          arrays: unknown[]
+          structures: Array<{
+            node_id: string
+            fields: Array<{
+              name: string
+              fields?: Array<{ name: string; datatype: string; size: number; arr: number; elem: number }>
+            }>
+          }>
+        }
+      }
+    }>
+    const { arrays, structures } = parsed[0].config.address_space
+    expect(arrays.length).toBe(0)
+    expect(structures.length).toBe(1)
+    expect(structures[0].node_id).toBe('ns=1;s=MY_VAR')
+    expect(structures[0].fields.map((f) => f.name)).toEqual(['[1]', '[2]'])
+    expect(structures[0].fields[0].fields).toEqual([
+      {
+        name: 'LEVEL',
+        datatype: 'INT',
+        size: 2,
+        arr: 0,
+        elem: 20,
+        permissions: { viewer: 'r', operator: 'rw', engineer: 'rw' },
+      },
+      {
+        name: 'FLOW',
+        datatype: 'DINT',
+        size: 4,
+        arr: 0,
+        elem: 21,
+        permissions: { viewer: 'r', operator: 'rw', engineer: 'rw' },
+      },
+    ])
+  })
+
+  it('still fails a bare array node whose elements are nowhere in the debug map', () => {
+    const cfg = baseServerConfig()
+    cfg.addressSpace.nodes = [makeNode({ nodeType: 'array', variablePath: 'GHOST_ARR', arrayLength: 2 })]
+    expect(() =>
+      generateOpcUaConfig(
+        [makePLCServer(cfg)],
+        debugMapJson([{ path: 'INSTANCE0.SOMETHING_ELSE', type: 'INT', arr: 0, elem: 0 }]),
+        instances,
+      ),
+    ).toThrow('Cannot resolve OPC-UA array address')
   })
 
   it('collects multiple OpcUaConfigErrors and throws combined', () => {
@@ -533,6 +641,20 @@ describe('validateOpcUaConfig', () => {
     cfg.addressSpace.nodes = [makeNode({ nodeType: 'array', variablePath: 'GHOST_ARR', arrayLength: 3 })]
     const result = validateOpcUaConfig(cfg, debugMapJson([]), instances)
     expect(result.valid).toBe(false)
+  })
+
+  it('a bare array node whose elements are a UDT validates clean', () => {
+    const cfg = baseServerConfig()
+    cfg.addressSpace.nodes = [makeNode({ nodeType: 'array', variablePath: 'TANKS', arrayLength: 2 })]
+    const result = validateOpcUaConfig(
+      cfg,
+      debugMapJson([
+        { path: 'INSTANCE0.TANKS[1].LEVEL', type: 'INT', arr: 0, elem: 20 },
+        { path: 'INSTANCE0.TANKS[2].LEVEL', type: 'INT', arr: 0, elem: 21 },
+      ]),
+      instances,
+    )
+    expect(result).toEqual({ valid: true, errors: [] })
   })
 
   it('array-with-fields field-level miss is NOT a validation error', () => {

@@ -61,9 +61,18 @@ export interface LoginResult {
   error?: string
 }
 
+/**
+ * RBAC role for a runtime account. `admin` may manage every account;
+ * `user` may edit only its own account and cannot create/delete users.
+ */
+export type RuntimeUserRole = 'admin' | 'user'
+
 export interface CreateUserParams {
   username: string
   password: string
+  /** Role for the new account. Ignored for the unauthenticated first-user
+   *  bootstrap (the runtime always makes the first user an admin). */
+  role?: RuntimeUserRole
 }
 
 export interface UsersInfoResult {
@@ -72,10 +81,46 @@ export interface UsersInfoResult {
   error?: string
 }
 
+/** A user account as reported by the runtime. */
+export interface RuntimeUser {
+  id: number
+  username: string
+  role: RuntimeUserRole
+}
+
+export interface ListUsersResult {
+  success: boolean
+  users?: RuntimeUser[]
+  error?: string
+}
+
+export interface WhoAmIResult {
+  success: boolean
+  user?: RuntimeUser
+  error?: string
+}
+
+/**
+ * Fields to change on an existing account. Only the provided fields are
+ * applied. `currentPassword` is required by the runtime when changing your
+ * OWN password (not when an admin resets another user's password).
+ */
+export interface UpdateUserParams {
+  username?: string
+  password?: string
+  currentPassword?: string
+  role?: RuntimeUserRole
+}
+
 export interface RuntimeStatusResult {
   success: boolean
   status?: PlcStatus | (string & {})
   timingStats?: TimingStats
+  /** Run/stop mode-switch position reported by the runtime (`'run'` /
+   *  `'stop'`).  Devices with no switch-aware VPP plugin always report
+   *  `'run'`, and runtimes older than this field omit it entirely — treat
+   *  `undefined` as "no gating". */
+  switchPosition?: 'run' | 'stop'
   error?: string
 }
 
@@ -133,6 +178,18 @@ export interface RuntimePort {
   /** Check if the runtime has users and get its version. */
   getUsersInfo(): Promise<UsersInfoResult>
 
+  /** List all user accounts on the runtime (requires authentication). */
+  listUsers(): Promise<ListUsersResult>
+
+  /** Return the currently authenticated account (id, username, role). */
+  whoAmI(): Promise<WhoAmIResult>
+
+  /** Update an account's username, password and/or role. */
+  updateUser(userId: number, params: UpdateUserParams): Promise<{ success: boolean; error?: string }>
+
+  /** Delete an account by id (admin only; cannot delete your own account). */
+  deleteUser(userId: number): Promise<{ success: boolean; error?: string }>
+
   /** Get current PLC runtime status with optional timing statistics. */
   getStatus(includeStats?: boolean): Promise<RuntimeStatusResult>
 
@@ -179,6 +236,14 @@ export interface RuntimePort {
    * Returns unsubscribe function.
    */
   onTokenRefreshed?(callback: (newToken: string) => void): Unsubscribe
+
+  /**
+   * Current runtime access token held by the platform's token authority, or
+   * null when not authenticated. Exposed so non-RuntimePort callers (e.g. the
+   * compile/upload pipeline) can read the always-fresh token from the single
+   * authority instead of a separately-tracked copy.
+   */
+  getAccessToken?(): string | null
 
   // --- LAN discovery (UDP broadcast) ---
 

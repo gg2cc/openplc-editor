@@ -1,15 +1,17 @@
 import { produce } from 'immer'
 import { StateCreator } from 'zustand'
 
-import type { PLCVariable } from '../../../../middleware/shared/ports/types'
+import { isValidIecIdentifier } from '../../../../middleware/shared/utils/ethercat'
+import { findAllReferencesToDataType } from '../../../utils/data-type-references'
+import type { DataTypeReferenceImpactAnalysis } from '../../../utils/data-type-references/types'
 import { parseIecStringToVariables } from '../../../utils/generate-iec-string-to-variables'
 import { generateIecVariablesToString } from '../../../utils/generate-iec-variables-to-string'
 import { syncNodesWithVariables, syncNodesWithVariablesFBD } from '../../../utils/graphical/sync-nodes-with-variables'
+import { isLegalIdentifier } from '../../../utils/keywords'
 import { restampFlowLibraryVariants } from '../../../utils/PLC/restamp-library-variants'
 import { collectAllSlaveNames } from '../../../utils/unique-slave-name'
 import type { FBDFlowType } from '../fbd'
 import type { FileSliceDataObject } from '../file'
-import type { HistorySnapshot } from '../history'
 import type { LadderFlowType } from '../ladder'
 import type { TabsProps } from '../tabs'
 import {
@@ -18,8 +20,15 @@ import {
   CreateServerEditor,
   LIBRARY_MANIFEST_TAB_NAME,
 } from '../tabs/utils'
-import type { SharedRootState, SharedSlice } from './types'
-import { createDatatypeObject, createEditorObjectForDatatype, createEditorObjectForPou, createPouObject } from './utils'
+import { cancelFlowWriteBacks, flushFlowWriteBacks } from './flow-writeback'
+import type { PouHistorySnapshot, SharedRootState, SharedSlice } from './types'
+import {
+  createDatatypeObject,
+  createEditorObjectForDatatype,
+  createEditorObjectForPou,
+  createPouObject,
+  guessDatatypeDerivation,
+} from './utils'
 
 const MAX_HISTORY_SIZE = 50
 
@@ -39,7 +48,98 @@ function deleteElement(
   if (currentEditor.type !== 'available' && currentEditor.meta.name === name) {
     state.editorActions.clearEditor()
   }
+
+  // A delete is an unsaved structural change (the file removal is queued in
+  // `pendingDeletions`). Flag the workspace dirty so it persists ONLY on the
+  // next save — identical on web and desktop. The file entry is already gone,
+  // so mark the workspace directly rather than via a file-scoped helper.
+  state.workspaceActions.setEditingState('unsaved')
+
   return { ok: true as const }
+}
+
+/**
+ * Reject element names that aren't valid IEC 61131-3 identifiers before they
+ * reach the file-path / parser layer. A name containing a space, slash, or
+ * backslash would otherwise be written straight into the on-disk POU path
+ * (`pous/<folder>/<name>.st`) and — on any parse failure — read back as the
+ * path itself, corrupting the name and orphaning files (the "deleting function"
+ * bug). Reuses the same primitive as variable-name validation for consistency.
+ */
+function validateElementName(name: string): { ok: true } | { ok: false; message: string } {
+  const [legal, reason] = isLegalIdentifier(name)
+  return legal ? { ok: true } : { ok: false, message: `'${name}' ${reason}` }
+}
+
+/**
+ * Data type names are compared case-insensitively: each one becomes a
+ * `datatypes/<Name>.dt` path, and macOS/Windows fold filename case, so
+ * `Foo` and `foo` would silently overwrite each other on save. IEC
+ * identifiers are case-insensitive anyway.
+ */
+const nameMatches = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()
+
+/**
+ * A raw datatypes/<Name>.dt file that failed to parse still owns its
+ * name: letting a new data type take it would make the save emit two
+ * specs for one path (and the raw echo would win). Case-insensitive —
+ * the file name is the identity and common filesystems fold case.
+ */
+function collidesWithUnparsedDataTypeFile(state: SharedRootState, name: string): { ok: boolean; message?: string } {
+  const collides = state.unparsedDataTypeFiles.some(
+    (f) => f.relativePath.split('/').pop()?.replace(/\.dt$/i, '').toLowerCase() === name.toLowerCase(),
+  )
+  return collides
+    ? {
+        ok: false,
+        message: `A data type file named "${name}.dt" exists on disk but could not be read — fix or remove it first`,
+      }
+    : { ok: true }
+}
+
+/**
+ * Post-propagation bookkeeping for a confirmed data type rename:
+ *
+ *   1. Flag every touched container's file dirty — single-file save and the
+ *      close-project check read these flags, and the propagated content
+ *      would otherwise be silently dropped on disk.
+ *   2. Regenerate code-mode variable buffers of affected POUs. `sanitizePou`
+ *      persists `editor.variable.code` as the authoritative variables block,
+ *      so a stale buffer would resurrect the old type name on save.
+ *   3. Regenerate the `.dt` code buffers of affected data types — committing
+ *      a stale buffer (commitCode → updateDatatype) would do the same.
+ */
+function syncAfterDatatypePropagation(state: SharedRootState, impact: DataTypeReferenceImpactAnalysis): void {
+  const dirtyFiles = new Set<string>()
+  const affectedPous = new Set<string>()
+  const affectedDatatypes = new Set<string>()
+  for (const ref of impact.references) {
+    // Global variables persist through the Resource entry in the file slice.
+    dirtyFiles.add(ref.kind === 'global-variable' ? 'Resource' : ref.container)
+    if (ref.kind === 'pou-variable') affectedPous.add(ref.container)
+    if (ref.kind === 'data-type-field' || ref.kind === 'data-type-base-type') affectedDatatypes.add(ref.container)
+  }
+  for (const name of dirtyFiles) {
+    state.sharedWorkspaceActions.handleFileAndWorkspaceSavedState(name)
+  }
+
+  // No-op for types whose code view isn't active.
+  for (const datatypeName of affectedDatatypes) {
+    state.projectActions.regenerateDatatypeText(datatypeName)
+  }
+
+  for (const pouName of affectedPous) {
+    const model = state.editor.meta.name === pouName ? state.editor : state.editors.find((e) => e.meta.name === pouName)
+    if (!model || (model.type !== 'plc-textual' && model.type !== 'plc-graphical')) continue
+    if (model.variable.display !== 'code') continue
+    const pou = state.project.data.pous.find((p) => p.name === pouName)
+    /* istanbul ignore next -- defensive: a pou-variable reference implies the POU exists */
+    if (!pou) continue
+    state.editorActions.updateModelVariablesForName(pouName, {
+      display: 'code',
+      code: generateIecVariablesToString(pou.interface?.variables ?? []),
+    })
+  }
 }
 
 function renameElement(
@@ -49,6 +149,9 @@ function renameElement(
   updateInProject: (oldName: string, newName: string) => { ok: boolean; message?: string } | void,
   afterRename?: (oldName: string, newName: string) => void,
 ) {
+  const nameCheck = validateElementName(newName)
+  if (!nameCheck.ok) return { ok: false as const, message: nameCheck.message }
+
   const result = updateInProject(oldName, newName)
   if (result && !result.ok) return { ok: false as const, message: result.message }
 
@@ -67,19 +170,32 @@ function renameElement(
   state.ladderFlowActions.renameLadderFlow(oldName, newName)
   state.fbdFlowActions.renameFBDFlow(oldName, newName)
 
+  // Follow the undo/redo stacks to the new key — otherwise the history is
+  // orphaned under the old name and undo becomes a silent no-op after rename.
+  state.snapshotActions.renameHistory(oldName, newName)
+
   afterRename?.(oldName, newName)
+
+  // A rename is an unsaved structural change — flag it dirty (the renamed file
+  // now lives under `newName`) so it persists ONLY on the next save, identical
+  // on web and desktop.
+  state.sharedWorkspaceActions.handleFileAndWorkspaceSavedState(newName)
 
   return { ok: true as const }
 }
 
 const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (setState, getState) => ({
   undoRedo: {},
+  pendingDatatypeRename: null,
 
   pouActions: {
     create: ({ type, name, language }) => {
       const state = getState()
       const existing = state.project.data.pous.find((p) => p.name === name)
       if (existing) return { ok: false, message: 'POU already exists' }
+
+      const nameCheck = validateElementName(name)
+      if (!nameCheck.ok) return nameCheck
 
       const pouDto = createPouObject({ type, name, language })
       const result = state.projectActions.createPou(pouDto)
@@ -154,6 +270,9 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
       const existing = state.project.data.pous.find((p) => p.name === newName)
       if (existing) return { ok: false, message: 'POU name already exists' }
 
+      const nameCheck = validateElementName(newName)
+      if (!nameCheck.ok) return nameCheck
+
       // Create a copy of the POU with the new name
       const language = sourcePou.body.language as 'il' | 'st' | 'ld' | 'sfc' | 'fbd' | 'python' | 'cpp'
       const pouDto = createPouObject({ type: sourcePou.pouType, name: newName, language })
@@ -192,6 +311,9 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
       state.editorActions.addModel(editorModel)
       state.fileActions.addFile({ name: newName, type: sourcePou.pouType, filePath: newName, isNew: true })
 
+      // Persist only on save: flag the new POU dirty instead of auto-saving.
+      state.sharedWorkspaceActions.handleFileAndWorkspaceSavedState(newName)
+
       return { ok: true }
     },
   },
@@ -199,8 +321,14 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
   datatypeActions: {
     create: ({ name, derivation }) => {
       const state = getState()
-      const existing = state.project.data.dataTypes.find((d) => d.name === name)
+      const existing = state.project.data.dataTypes.find((d) => nameMatches(d.name, name))
       if (existing) return { ok: false, message: 'Data type already exists' }
+
+      const fileCollision = collidesWithUnparsedDataTypeFile(state, name)
+      if (!fileCollision.ok) return fileCollision
+
+      const nameCheck = validateElementName(name)
+      if (!nameCheck.ok) return nameCheck
 
       const datatype = createDatatypeObject({ name, derivation })
       const result = state.projectActions.createDatatype({ data: datatype })
@@ -230,19 +358,69 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
 
     delete: (name) => deleteElement(getState(), name, (n) => getState().projectActions.deleteDatatype(n)),
 
-    rename: (oldName, newName) => {
+    rename: async (oldName, newName) => {
       const state = getState()
-      const existing = state.project.data.dataTypes.find((d) => d.name === newName)
-      if (existing) return { ok: false, message: 'Data type name already exists' }
+      // Includes the type being renamed: a case-only change writes the
+      // new file and then deletes the old path — the same file where
+      // the filesystem folds case.
+      const collides = newName !== oldName && state.project.data.dataTypes.some((d) => nameMatches(d.name, newName))
+      if (collides) return { ok: false, message: 'Data type name already exists' }
+
+      const fileCollision = collidesWithUnparsedDataTypeFile(state, newName)
+      if (!fileCollision.ok) return fileCollision
 
       const datatype = state.project.data.dataTypes.find((d) => d.name === oldName)
       if (!datatype) return { ok: false, message: 'Data type not found' }
 
-      const updatedDatatype = { ...datatype, name: newName }
+      // renameElement validates too, but checked up front so the impact
+      // modal never opens for a rename that would fail afterwards.
+      const nameCheck = validateElementName(newName)
+      if (!nameCheck.ok) return nameCheck
 
-      return renameElement(state, oldName, newName, () => {
-        state.projectActions.updateDatatype(oldName, updatedDatatype)
+      // Fold pending code-view edits in first, so the rename doesn't
+      // regenerate over them — and so the reference scan sees them.
+      const reconcile = state.projectActions.reconcileDatatypeText(oldName)
+      if (!reconcile.ok) return { ok: false, message: reconcile.message }
+
+      if (newName !== oldName) {
+        const freshState = getState()
+        const impact = findAllReferencesToDataType(
+          oldName,
+          freshState.project.data.pous,
+          freshState.project.data.configurations.resource.globalVariables,
+          freshState.project.data.dataTypes,
+        )
+        if (impact.totalReferences > 0) {
+          // Overwriting a pending request would drop its resolver and strand
+          // the first caller's await forever (e.g. Enter + blur double-fire).
+          if (getState().pendingDatatypeRename) {
+            return { ok: false, message: 'Another data type rename is awaiting confirmation' }
+          }
+          const confirmed = await new Promise<boolean>((resolve) => {
+            setState({ pendingDatatypeRename: { oldName, newName, impact, resolve } })
+          })
+          if (!confirmed) return { ok: false, cancelled: true, message: 'Rename cancelled' }
+          getState().projectActions.propagateDatatypeRename(oldName, newName)
+          syncAfterDatatypePropagation(getState(), impact)
+        }
+      }
+
+      const result = renameElement(getState(), oldName, newName, () => {
+        // Renames via the dedicated action so the old .dt path gets
+        // queued for deletion — a plain updateDatatype would strand
+        // the old file on disk.
+        getState().projectActions.updateDatatypeName(oldName, newName)
       })
+      // Only after renameElement are the type and its model both keyed by newName.
+      if (result.ok) getState().projectActions.regenerateDatatypeText(newName)
+      return result
+    },
+
+    respondToPendingRename: (confirmed) => {
+      const pending = getState().pendingDatatypeRename
+      if (!pending) return
+      setState({ pendingDatatypeRename: null })
+      pending.resolve(confirmed)
     },
 
     duplicate: (sourceName, newName) => {
@@ -250,8 +428,14 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
       const source = state.project.data.dataTypes.find((d) => d.name === sourceName)
       if (!source) return { ok: false, message: 'Data type not found' }
 
-      const existing = state.project.data.dataTypes.find((d) => d.name === newName)
+      const existing = state.project.data.dataTypes.find((d) => nameMatches(d.name, newName))
       if (existing) return { ok: false, message: 'Data type name already exists' }
+
+      const fileCollision = collidesWithUnparsedDataTypeFile(state, newName)
+      if (!fileCollision.ok) return fileCollision
+
+      const nameCheck = validateElementName(newName)
+      if (!nameCheck.ok) return nameCheck
 
       const copy = { ...source, name: newName }
       const result = state.projectActions.createDatatype({ data: copy })
@@ -261,6 +445,9 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
       const editorModel = createEditorObjectForDatatype(newName, source.derivation)
       state.editorActions.addModel(editorModel)
       state.fileActions.addFile({ name: newName, type: 'data-type', filePath: newName, isNew: true })
+
+      // Persist only on save: flag the new datatype dirty instead of auto-saving.
+      state.sharedWorkspaceActions.handleFileAndWorkspaceSavedState(newName)
 
       return { ok: true }
     },
@@ -272,6 +459,9 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
       /* istanbul ignore next -- defensive: servers is always initialized as [] */
       const servers = state.project.data.servers ?? []
       if (servers.some((s) => s.name === name)) return { ok: false, message: 'Server already exists' }
+
+      const nameCheck = validateElementName(name)
+      if (!nameCheck.ok) return nameCheck
 
       const result = state.projectActions.createServer({ data: { name, protocol } })
       /* istanbul ignore next -- defensive: shared slice already validates name uniqueness */
@@ -306,6 +496,9 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
       /* istanbul ignore next -- defensive: remoteDevices is always initialized as [] */
       const devices = state.project.data.remoteDevices ?? []
       if (devices.some((d) => d.name === name)) return { ok: false, message: 'Remote device already exists' }
+
+      const nameCheck = validateElementName(name)
+      if (!nameCheck.ok) return nameCheck
 
       const result = state.projectActions.createRemoteDevice({ data: { name, protocol } })
       /* istanbul ignore next -- defensive: shared slice already validates name uniqueness */
@@ -393,6 +586,15 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
       if (!device) return { ok: false, message: 'EtherCAT device not found' }
 
       const oldName = device.name
+      // A SoftMotion drive's name IS the axis variable name emitted into
+      // generated code, so it must be a valid IEC identifier (no spaces,
+      // hyphens, or leading digits).
+      if (device.cia402?.enabled && !isValidIecIdentifier(newName)) {
+        return {
+          ok: false,
+          message: `"${newName}" is not a valid axis name. Use letters, digits, and underscores, starting with a letter or underscore.`,
+        }
+      }
       // Only *rejecting* enforcement of slave-name uniqueness — scan-bus add
       // auto-suffixes instead. Tabs/editor/file slices are name-keyed and break
       // silently on duplicates, so new write paths must replicate one strategy.
@@ -524,6 +726,10 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
     },
 
     handleOpenProjectResponse: (data) => {
+      // A write-back scheduled against the previous project must not fire
+      // into the one being opened (project load flips `updated` flags as a
+      // side effect, which would let a stale timer persist a fresh flow).
+      cancelFlowWriteBacks()
       getState().sharedWorkspaceActions.clearStatesOnCloseProject()
       getState().workspaceActions.setEditingState('saved')
       // Any in-place reload (branch switch, restore, discard, stash) can move
@@ -548,6 +754,22 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
       getState().projectActions.setProject({
         meta: data.meta,
         data: data.projectData,
+      })
+      // Raw .dt files that failed to parse — stashed so saves echo
+      // them back verbatim; always set so a reopen clears stale ones.
+      getState().projectActions.setUnparsedDataTypeFiles(data.unparsedDataTypeFiles ?? [])
+
+      // Unreadable files have no PLCDataType, so no tree leaf to click.
+      const unparsedDataTypes = (data.unparsedDataTypeFiles ?? []).flatMap((file) => {
+        const name = file.relativePath.split('/').pop()?.replace(/\.dt$/i, '')
+        if (!name) return []
+        // The file registry is keyed by raw name across both kinds: a
+        // colliding file would retype the real element and misroute its save.
+        const taken = [...data.projectData.pous, ...data.projectData.dataTypes].some(
+          (element) => element.name.toLowerCase() === name.toLowerCase(),
+        )
+        if (taken) return []
+        return [{ name, content: file.content, derivation: guessDatatypeDerivation(file.content) }]
       })
 
       // Add ladder and FBD flows for graphical POUs.
@@ -666,8 +888,8 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
           const freshLadderFlows = freshState.ladderFlows
           const freshFBDFlows = freshState.fbdFlows
           const freshPous = freshState.project.data.pous
-          const updateLadderNode = freshState.ladderFlowActions.updateNode
-          const updateFBDNode = freshState.fbdFlowActions.updateNode
+          const updateLadderNodes = freshState.ladderFlowActions.updateNodes
+          const updateFBDNodes = freshState.fbdFlowActions.updateNodes
 
           try {
             ladderPous.forEach((pou) => {
@@ -677,7 +899,7 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
                 const pouFlow = freshLadderFlows.filter((flow) => flow.name === pou.name)
                 /* istanbul ignore next -- defensive: flow always exists since we just added it */
                 if (pouFlow.length > 0) {
-                  syncNodesWithVariables(freshPou.interface?.variables ?? [], pouFlow, updateLadderNode)
+                  syncNodesWithVariables(freshPou.interface?.variables ?? [], pouFlow, updateLadderNodes)
                 }
               }
             })
@@ -689,7 +911,7 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
                 const pouFlow = freshFBDFlows.filter((flow) => flow.name === pou.name)
                 /* istanbul ignore next -- defensive: flow always exists since we just added it */
                 if (pouFlow.length > 0) {
-                  syncNodesWithVariablesFBD(freshPou.interface?.variables ?? [], pouFlow, updateFBDNode)
+                  syncNodesWithVariablesFBD(freshPou.interface?.variables ?? [], pouFlow, updateFBDNodes)
                 }
               }
             })
@@ -757,6 +979,9 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
       })
       data.projectData.dataTypes.forEach((dt) => {
         files[dt.name] = { type: 'data-type', filePath: dt.name, saved: true }
+      })
+      unparsedDataTypes.forEach(({ name }) => {
+        files[name] = { type: 'data-type', filePath: name, saved: true }
       })
       const servers = data.projectData.servers
       if (servers) {
@@ -843,12 +1068,32 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
             model.variable = { display: 'code', code: pouWithText.variablesText }
           }
           getState().editorActions.addModel(model)
-          // If this is the active editor (main POU), update it too
-          /* istanbul ignore next -- setEditor early-returns when name matches current editor */
-          if (getState().editor.meta.name === pou.name) {
-            getState().editorActions.setEditor(model)
-          }
+          // The auto-open block above may already have added and activated a
+          // default table-mode model for this POU (it prefers "main" — exactly
+          // the POU most likely to carry the unparseable variables). `addModel`
+          // no-ops on duplicates and `setEditor` early-returns when the name
+          // matches the active editor, so neither can deliver the raw text to
+          // an existing model — the code view would show an empty skeleton
+          // instead of the preserved declarations. `updateModelVariablesForName`
+          // updates whichever object holds the POU: the active editor or the
+          // stored model.
+          getState().editorActions.updateModelVariablesForName(pou.name, {
+            display: 'code',
+            code: pouWithText.variablesText,
+          })
         }
+      })
+
+      // Tab included, and focus stays on the auto-opened POU above.
+      unparsedDataTypes.forEach(({ name, content, derivation }) => {
+        const tabToBeCreated: TabsProps = {
+          name,
+          path: `/data/data-types/${derivation}/${name}`,
+          elementType: { type: 'data-type', derivation },
+        }
+        getState().tabsActions.updateTabs(tabToBeCreated)
+        getState().editorActions.addModel(createEditorObjectForDatatype(name, derivation))
+        getState().editorActions.updateModelStructureForName(name, { display: 'code', code: content })
       })
 
       // Reset all graphical flow updated flags at the very end of project open.
@@ -894,6 +1139,17 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
       )
     },
 
+    renameHistory: (oldName, newName) => {
+      setState(
+        produce((state: SharedRootState) => {
+          const history = state.undoRedo[oldName]
+          if (!history) return
+          delete state.undoRedo[oldName]
+          state.undoRedo[newName] = history
+        }),
+      )
+    },
+
     markSaved: (pouName) => {
       setState(
         produce((state: SharedRootState) => {
@@ -905,10 +1161,11 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
       )
     },
 
-    markAllSaved: () => {
+    markAllSaved: (except) => {
       setState(
         produce((state: SharedRootState) => {
-          for (const history of Object.values(state.undoRedo)) {
+          for (const [pouName, history] of Object.entries(state.undoRedo)) {
+            if (except?.includes(pouName)) continue
             history.savedAtDepth = history.past.length
           }
         }),
@@ -916,25 +1173,35 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
     },
 
     undo: (pouName) => {
+      // A debounced graphical write-back may still be pending — flush it so
+      // the redo snapshot below can't pair a stale body with a fresh flow.
+      // A failed flush leaves the body stale, and capturing it would restore
+      // the file to "saved" over content that never reached disk (DOPE-495).
+      if (flushFlowWriteBacks(getState, pouName).length > 0) return false
       const state = getState()
       const history = state.undoRedo[pouName]
-      if (!history || history.past.length === 0) return
+      if (!history || history.past.length === 0) return true
 
       const snapshot = history.past[history.past.length - 1]
       const pou = state.project.data.pous.find((p) => p.name === pouName)
-      if (!pou) return
+      const dataType = pou ? undefined : state.project.data.dataTypes.find((d) => d.name === pouName)
 
-      // Save current state to future (deep copy to avoid mutation)
-      const ladderFlow = state.ladderFlows.find((f) => f.name === pouName)
-      const fbdFlow = state.fbdFlows.find((f) => f.name === pouName)
-      const currentSnapshot: HistorySnapshot = {
-        variables: JSON.parse(JSON.stringify(pou.interface?.variables ?? [])) as PLCVariable[],
-        body: JSON.parse(JSON.stringify(pou.body.value)) as unknown,
-        ladderFlow: ladderFlow ? JSON.parse(JSON.stringify(ladderFlow)) : undefined,
-        fbdFlow: fbdFlow ? JSON.parse(JSON.stringify(fbdFlow)) : undefined,
-        globalVariables: JSON.parse(
-          JSON.stringify(state.project.data.configurations.resource.globalVariables),
-        ) as PLCVariable[],
+      // Save current state to future. Plain references — the store is
+      // immer-managed (frozen, copy-on-write), so later edits can never
+      // reach a captured snapshot.
+      let currentSnapshot: PouHistorySnapshot
+      if (pou) {
+        currentSnapshot = {
+          variables: pou.interface?.variables ?? [],
+          body: pou.body.value,
+          ladderFlow: state.ladderFlows.find((f) => f.name === pouName),
+          fbdFlow: state.fbdFlows.find((f) => f.name === pouName),
+          globalVariables: state.project.data.configurations.resource.globalVariables,
+        }
+      } else if (dataType) {
+        currentSnapshot = { variables: [], body: null, dataTypes: [dataType] }
+      } else {
+        return true
       }
 
       setState(
@@ -947,51 +1214,69 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
         }),
       )
 
-      state.projectActions.applyPouSnapshot(pouName, snapshot.variables, {
-        language: pou.body.language,
-        value: snapshot.body,
-      })
-      if (snapshot.globalVariables) {
-        state.projectActions.setGlobalVariables({ variables: snapshot.globalVariables })
-      }
-      // Restore graphical flow state (nodes, edges, positions)
-      if (snapshot.ladderFlow) {
-        state.ladderFlowActions.applyLadderFlowSnapshot({
-          editorName: pouName,
-          snapshot: snapshot.ladderFlow as LadderFlowType,
+      if (pou) {
+        state.projectActions.applyPouSnapshot(pouName, snapshot.variables, {
+          language: pou.body.language,
+          value: snapshot.body,
         })
-      }
-      if (snapshot.fbdFlow) {
-        state.fbdFlowActions.applyFBDFlowSnapshot({ editorName: pouName, snapshot: snapshot.fbdFlow as FBDFlowType })
+        if (snapshot.globalVariables) {
+          state.projectActions.setGlobalVariables({ variables: snapshot.globalVariables })
+        }
+        // Restore graphical flow state (nodes, edges, positions)
+        if (snapshot.ladderFlow) {
+          state.ladderFlowActions.applyLadderFlowSnapshot({
+            editorName: pouName,
+            snapshot: snapshot.ladderFlow as LadderFlowType,
+          })
+        }
+        if (snapshot.fbdFlow) {
+          state.fbdFlowActions.applyFBDFlowSnapshot({ editorName: pouName, snapshot: snapshot.fbdFlow as FBDFlowType })
+        }
+      } else {
+        const restoredDataType = snapshot.dataTypes?.[0]
+        // Pin the name to the current key: snapshots taken before a rename
+        // carry the old name, and restoring it would desync tabs/files/editors.
+        if (restoredDataType) {
+          state.projectActions.applyDatatypeSnapshot(pouName, { ...restoredDataType, name: pouName })
+        }
       }
 
       // Check if we've returned to the saved state
       const afterUndo = getState().undoRedo[pouName]
       if (afterUndo?.savedAtDepth !== null && afterUndo?.savedAtDepth === afterUndo?.past.length) {
         getState().fileActions.updateFile({ name: pouName, saved: true })
+      } else {
+        // Diverged from the on-disk state — flag it or the next save-all skips the revert.
+        getState().sharedWorkspaceActions.handleFileAndWorkspaceSavedState(pouName)
       }
+      return true
     },
 
     redo: (pouName) => {
+      // See undo — same pending write-back consistency requirement.
+      if (flushFlowWriteBacks(getState, pouName).length > 0) return false
       const state = getState()
       const history = state.undoRedo[pouName]
-      if (!history || history.future.length === 0) return
+      if (!history || history.future.length === 0) return true
 
       const snapshot = history.future[history.future.length - 1]
       const pou = state.project.data.pous.find((p) => p.name === pouName)
-      if (!pou) return
+      const dataType = pou ? undefined : state.project.data.dataTypes.find((d) => d.name === pouName)
 
-      // Save current state to past (deep copy to avoid mutation)
-      const ladderFlow = state.ladderFlows.find((f) => f.name === pouName)
-      const fbdFlow = state.fbdFlows.find((f) => f.name === pouName)
-      const currentSnapshot: HistorySnapshot = {
-        variables: JSON.parse(JSON.stringify(pou.interface?.variables ?? [])) as PLCVariable[],
-        body: JSON.parse(JSON.stringify(pou.body.value)) as unknown,
-        ladderFlow: ladderFlow ? JSON.parse(JSON.stringify(ladderFlow)) : undefined,
-        fbdFlow: fbdFlow ? JSON.parse(JSON.stringify(fbdFlow)) : undefined,
-        globalVariables: JSON.parse(
-          JSON.stringify(state.project.data.configurations.resource.globalVariables),
-        ) as PLCVariable[],
+      // Save current state to past. Plain references — see undo.
+      let currentSnapshot: PouHistorySnapshot
+      if (pou) {
+        currentSnapshot = {
+          variables: pou.interface?.variables ?? [],
+          body: pou.body.value,
+          ladderFlow: state.ladderFlows.find((f) => f.name === pouName),
+          fbdFlow: state.fbdFlows.find((f) => f.name === pouName),
+          globalVariables: state.project.data.configurations.resource.globalVariables,
+        }
+      } else if (dataType) {
+        currentSnapshot = { variables: [], body: null, dataTypes: [dataType] }
+      } else {
+        return true
       }
 
       setState(
@@ -1004,29 +1289,42 @@ const createSharedSlice: StateCreator<SharedRootState, [], [], SharedSlice> = (s
         }),
       )
 
-      state.projectActions.applyPouSnapshot(pouName, snapshot.variables, {
-        language: pou.body.language,
-        value: snapshot.body,
-      })
-      if (snapshot.globalVariables) {
-        state.projectActions.setGlobalVariables({ variables: snapshot.globalVariables })
-      }
-      // Restore graphical flow state (nodes, edges, positions)
-      if (snapshot.ladderFlow) {
-        state.ladderFlowActions.applyLadderFlowSnapshot({
-          editorName: pouName,
-          snapshot: snapshot.ladderFlow as LadderFlowType,
+      if (pou) {
+        state.projectActions.applyPouSnapshot(pouName, snapshot.variables, {
+          language: pou.body.language,
+          value: snapshot.body,
         })
-      }
-      if (snapshot.fbdFlow) {
-        state.fbdFlowActions.applyFBDFlowSnapshot({ editorName: pouName, snapshot: snapshot.fbdFlow as FBDFlowType })
+        if (snapshot.globalVariables) {
+          state.projectActions.setGlobalVariables({ variables: snapshot.globalVariables })
+        }
+        // Restore graphical flow state (nodes, edges, positions)
+        if (snapshot.ladderFlow) {
+          state.ladderFlowActions.applyLadderFlowSnapshot({
+            editorName: pouName,
+            snapshot: snapshot.ladderFlow as LadderFlowType,
+          })
+        }
+        if (snapshot.fbdFlow) {
+          state.fbdFlowActions.applyFBDFlowSnapshot({ editorName: pouName, snapshot: snapshot.fbdFlow as FBDFlowType })
+        }
+      } else {
+        const restoredDataType = snapshot.dataTypes?.[0]
+        // Pin the name to the current key: snapshots taken before a rename
+        // carry the old name, and restoring it would desync tabs/files/editors.
+        if (restoredDataType) {
+          state.projectActions.applyDatatypeSnapshot(pouName, { ...restoredDataType, name: pouName })
+        }
       }
 
       // Check if we've returned to the saved state
       const afterRedo = getState().undoRedo[pouName]
       if (afterRedo?.savedAtDepth !== null && afterRedo?.savedAtDepth === afterRedo?.past.length) {
         getState().fileActions.updateFile({ name: pouName, saved: true })
+      } else {
+        // Diverged from the on-disk state — flag it or the next save-all skips the revert.
+        getState().sharedWorkspaceActions.handleFileAndWorkspaceSavedState(pouName)
       }
+      return true
     },
   },
 })

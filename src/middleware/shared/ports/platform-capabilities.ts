@@ -48,6 +48,9 @@ export interface PlatformCapabilities {
   /** True if the app supports exporting projects as XML files (Codesys, old-editor formats). */
   hasProjectExport: boolean
 
+  /** True if the app supports importing a project from a PLCopen XML file. */
+  hasProjectImport: boolean
+
   /** True if the app supports version control (branches, commits, change tracking). */
   hasVersionControl: boolean
 
@@ -101,6 +104,17 @@ export interface PlatformCapabilities {
   /** True if the app supports EtherCAT device configuration and ESI repository. */
   hasEthercat: boolean
 
+  // --- Debugging ---
+
+  /**
+   * Polling interval (ms) for the debugger's HTTP fallback transport (used
+   * when WebRTC is unavailable). Each poll is a full proxied round-trip, so
+   * this is deployment-tunable rather than a fixed constant — e.g.
+   * autonomy-node runs no WebRTC signaling relay and wants this to match
+   * its general-purpose poll rate.
+   */
+  debugRelayPollIntervalMs: number
+
   // --- Environment ---
 
   /** True when running in a development build (Vite DEV / webpack development mode). */
@@ -121,6 +135,7 @@ export const EDITOR_CAPABILITIES: PlatformCapabilities = {
   hasInProcessSimulator: true,
   hasLocalFilesystem: true,
   hasProjectExport: true,
+  hasProjectImport: true,
   hasVersionControl: false,
   hasAboutDialog: true,
   hasPythonLSP: true,
@@ -135,6 +150,7 @@ export const EDITOR_CAPABILITIES: PlatformCapabilities = {
   hasDirectProgramUpload: false,
   hasPackageManager: true,
   hasEthercat: true,
+  debugRelayPollIntervalMs: 1000,
   isDevMode: false,
 }
 
@@ -147,7 +163,10 @@ export const WEB_CAPABILITIES: PlatformCapabilities = {
   hasWebRTC: true,
   hasInProcessSimulator: true,
   hasLocalFilesystem: false,
-  hasProjectExport: false,
+  // Browser-download implementation makes export just as viable on web
+  // as on desktop — no reason to keep this gated off.
+  hasProjectExport: true,
+  hasProjectImport: true,
   hasVersionControl: true,
   hasAboutDialog: true,
   // `monaco-pyright-lsp` ships its own ESM worker via
@@ -175,5 +194,6 @@ export const WEB_CAPABILITIES: PlatformCapabilities = {
   hasDirectProgramUpload: true,
   hasPackageManager: false,
   hasEthercat: false,
+  debugRelayPollIntervalMs: 1000,
   isDevMode: false,
 }

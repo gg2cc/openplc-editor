@@ -50,10 +50,19 @@ import type { KnownPou } from '@root/backend/shared/utils/PLC/split-program-st'
 type LibraryCompileBridge = {
   makeRuntimeApiRequest: <T = void>(
     ipAddress: string,
-    jwtToken: string,
     endpoint: string,
     responseParser?: (data: string) => T,
   ) => Promise<{ success: true; data?: T } | { success: false; error: string }>
+  // Required to satisfy compileProgram's bridge contract; never invoked on the
+  // library path (it compiles with runtimeIpAddress=null, so no upload runs).
+  makeRuntimeApiUpload: (opts: {
+    ipAddress: string
+    fileBuffer: Buffer
+    filename: string
+    contentType: string
+    cleanBuild: boolean
+    onUploadAccepted?: (responseBody: string) => void
+  }) => Promise<{ success: true; data: string } | { success: false; error: string }>
   loadEnabledArchives: (enabledNames: string[]) => { archives: unknown[]; missing: string[] }
 }
 
@@ -84,7 +93,6 @@ const POST_BUILD_START_POLL_INTERVAL_MS = 150
 
 import { assertPathContained } from '@root/backend/editor/utils/path-containment'
 import { getRuntimeHttpsOptions } from '@root/backend/editor/utils/runtime-https-config'
-import { isNewTranspilerEnabled } from '@root/backend/editor/utils/transpiler-mode'
 import { runCompilePipeline } from '@root/backend/shared/compile/pipeline'
 import { mergeStrucppRuntimeIntoSkeleton } from '@root/backend/shared/compile/steps/merge-strucpp-runtime-into-skeleton'
 import { readHalsFile } from '@root/backend/shared/firmware/hals-loader'
@@ -104,6 +112,7 @@ import {
   buildModuleConfigEntries,
   generateVendorPluginConfig,
 } from '@root/backend/shared/utils/vpp/generate-vendor-plugin-config'
+import { APP_VERSION } from '@root/frontend/data/constants/app-version'
 import { getErrorMessage } from '@root/frontend/utils/get-error-message'
 import { app as electronApp, dialog, MessageChannelMain } from 'electron'
 import type { MessagePortMain } from 'electron/main'
@@ -111,8 +120,7 @@ import JSZip from 'jszip'
 
 import type { PlatformOption } from '../../../middleware/shared/ports/types'
 import { BoardInfoResolver } from '../../shared/hardware/board-info-resolver'
-import type { PackageManifest } from '../package-manager'
-import { PackageManagerModule } from '../package-manager'
+import { formatPackageIntegrityError, PackageManagerModule } from '../package-manager'
 import { CreateXMLFile } from '../utils'
 import { createDesktopLibraryBuildPort } from './desktop-library-build-port'
 import { createEditorCompilerPlatformPort } from './editor-compiler-platform-port'
@@ -168,8 +176,6 @@ class CompilerModule {
   arduinoCliConfigurationFilePath: string
   arduinoCliBaseParameters: string[]
 
-  xml2stBinaryPath: string
-
   strucppRuntimeDir: string
 
   // Memoised arduino-cli `--show-properties=expanded` output keyed by FQBN.
@@ -189,6 +195,10 @@ class CompilerModule {
     'ArduinoJson',
     'Arduino_MachineControl',
     'ArduinoMqttClient',
+    // Backs the always-on debugger's DEBUG_GET_BOARD_ID (FC 0x48). ModbusSlave.cpp
+    // includes <ArduinoUniqueID.h> unconditionally (not behind a USE_*_BLOCK gate),
+    // so the lib must be installed for every Arduino build.
+    'ArduinoUniqueID',
     'AVR_PWM',
     'CAN',
     'CONTROLLINO',
@@ -223,8 +233,6 @@ class CompilerModule {
     this.arduinoCliConfigurationFilePath = join(electronApp.getPath('userData'), 'User', 'arduino-cli.yaml')
     // INFO: We use this approach because some commands can receive additional parameters as a string array.
     this.arduinoCliBaseParameters = ['--config-file', this.arduinoCliConfigurationFilePath]
-
-    this.xml2stBinaryPath = this.#constructXml2stBinaryPath()
 
     this.strucppRuntimeDir = this.#constructStrucppRuntimeDir()
   }
@@ -352,10 +360,6 @@ class CompilerModule {
     return join(this.binaryDirectoryPath, 'arduino-cli')
   }
 
-  #constructXml2stBinaryPath(): string {
-    return join(this.binaryDirectoryPath, 'xml2st', CompilerModule.HOST_PLATFORM === 'darwin' ? 'xml2st' : '')
-  }
-
   #constructStrucppRuntimeDir(): string {
     // strucpp's runtime headers (`src/runtime/include/`) live in two
     // places depending on whether we're running dev or a packaged app:
@@ -432,14 +436,6 @@ class CompilerModule {
       arduinoCliBinaryPath += '.exe'
     }
     return spawn(arduinoCliBinaryPath, args)
-  }
-
-  #executeXml2st(args: string[]) {
-    let xml2stBinaryPath = this.xml2stBinaryPath
-    if (CompilerModule.HOST_PLATFORM === 'win32') {
-      xml2stBinaryPath += '.exe'
-    }
-    return spawn(xml2stBinaryPath, args)
   }
 
   // ############################################################################
@@ -843,64 +839,6 @@ class CompilerModule {
 
   // +++++++++++++++++++++++++++ Compilation Methods +++++++++++++++++++++++++++++
 
-  async handleGenerateXMLfromJSON(sourceTargetFolderPath: string, jsonData: PLCProjectData) {
-    return new Promise<MethodsResult<{ xmlPath: string; xmlContent: string }>>((resolve, reject) => {
-      const { data: xmlData } = XmlGenerator(jsonData as Parameters<typeof XmlGenerator>[0], 'old-editor')
-      if (typeof xmlData !== 'string') {
-        reject(new Error('XML data is not a string'))
-        return
-      }
-
-      const xmlCreationResult = CreateXMLFile(sourceTargetFolderPath, xmlData, 'plc')
-
-      if (xmlCreationResult.success) {
-        resolve({ success: true, data: { xmlPath: sourceTargetFolderPath, xmlContent: xmlData } })
-      } else {
-        reject(new Error('Failed to create XML file'))
-      }
-    })
-  }
-
-  async handleTranspileXMLtoST(
-    generatedXMLFilePath: string,
-    handleOutputData: (chunk: Buffer | string, logLevel?: 'info' | 'error') => void,
-    extraXml2stArgs: readonly string[],
-  ) {
-    return new Promise<MethodsResult<string | Buffer>>((resolve, reject) => {
-      // `extraXml2stArgs` comes from the shared pipeline's
-      // `TranspileXmlToStArgs.xml2stArgs` — the single source of truth
-      // for xml2st flag semantics across editor and web.  Editor passes
-      // them through verbatim (trusted local binary); web's adapter
-      // filters against its known-args allowlist before sending to the
-      // compile-service.  Strucpp targets currently pass
-      // `['--keep-structs']` (native STRUCT declarations vs matiec's
-      // legacy struct→FB rewrite); future flags appear here as the
-      // pipeline opts into them.
-      const executeCommand = this.#executeXml2st(['--generate-st', generatedXMLFilePath, ...extraXml2stArgs])
-
-      let stderrData = ''
-
-      // INFO: We use the xml2st command to transpile the XML file to ST.
-      executeCommand.stdout?.on('data', (data: Buffer) => {
-        handleOutputData(data)
-      })
-      executeCommand.stderr?.on('data', (data: Buffer) => {
-        stderrData += data.toString()
-      })
-
-      executeCommand.on('close', (code) => {
-        if (code === 0) {
-          handleOutputData(`ST file generated at: ${generatedXMLFilePath.replace('plc.xml', 'program.st')}`, 'info')
-          resolve({
-            success: true,
-          })
-        } else {
-          reject(new Error(`xml2st process exited with code ${code}\n${stderrData}`))
-        }
-      })
-    })
-  }
-
   async handleCompileSTtoCpp(
     sourceTargetFolderPath: string,
     handleOutputData: (chunk: Buffer | string, logLevel?: 'info' | 'error', compileError?: StrucppCompileError) => void,
@@ -1000,9 +938,18 @@ class CompilerModule {
   // and the Arduino sketch walks them dynamically for I/O binding.
   // The debugger will be redesigned in Phase 4.
 
-  // TODO: This method is used to update the index of the Arduino core.
-  // We should validate if this is necessary and if it works correctly.
-  async handleCoreUpdateIndex(handleOutputData: HandleOutputDataCallback) {
+  /**
+   * `arduino-cli core update-index` — refetch the platform indexes.
+   *
+   * Required before installing a core that lives in a third-party index:
+   * passing `--additional-urls` to `core install` alone is not enough,
+   * because the CLI resolves the platform against its *cached* index and
+   * reports "Platform not found" until that cache has seen the vendor URL.
+   *
+   * `additionalUrls` is forwarded so the refresh covers the vendor index
+   * as well as the ones configured in `arduino-cli.yaml`.
+   */
+  async handleCoreUpdateIndex(handleOutputData: HandleOutputDataCallback, additionalUrls?: string) {
     return new Promise<MethodsResult<string | Buffer>>((resolve, reject) => {
       let binaryPath = this.arduinoCliBinaryPath
       const [flag, configFilePath] = this.arduinoCliBaseParameters
@@ -1011,7 +958,13 @@ class CompilerModule {
         // INFO: On Windows, we need to add the .exe extension to the binary path.
         binaryPath += '.exe'
       }
-      const executeCommand = spawn(binaryPath, ['core', 'update-index', flag, configFilePath])
+      const executeCommand = spawn(binaryPath, [
+        'core',
+        'update-index',
+        ...(additionalUrls ? ['--additional-urls', additionalUrls] : []),
+        flag,
+        configFilePath,
+      ])
 
       let stderrData = ''
 
@@ -1033,16 +986,60 @@ class CompilerModule {
     })
   }
 
+  /**
+   * Install the Arduino core a board needs, pulling it from a vendor
+   * board-manager index when the board declares one.
+   *
+   * `boardManagerUrl` comes from the VPP manifest (`target.boardManagerUrl`)
+   * or hals.json (`board_manager_url`).  Cores outside arduino-cli's
+   * built-in index — `industrialshields:esp32`, for example — are
+   * unresolvable without it, and the install dies with
+   * "Platform '<id>' not found" (exit 7).  When one is supplied we refresh
+   * the index against that URL first, then install with the same
+   * `--additional-urls`; both steps are needed, since `core install`
+   * resolves against the cached index.
+   */
   async handleCoreInstallation(
     boardCore: string | null,
     handleOutputData: (chunk: Buffer | string, logLevel?: 'info' | 'error') => void,
+    coreVersion?: string,
+    boardManagerUrl?: string,
   ) {
     if (boardCore === null) return
 
     const isCoreInstalled = Object.keys(await this.getArduinoInstalledCores()).some((core) => core === boardCore)
-    if (isCoreInstalled) {
+    // Without a pinned version, any installed version is fine — skip the install.
+    // With a pinned version (prebuilt arduino libraries are ABI-locked to it),
+    // always run `core install <id>@<version>`: arduino-cli installs exactly that
+    // version and fails if it does not exist, pinning the core to the version
+    // the precompiled library was built against.
+    if (!coreVersion && isCoreInstalled) {
       handleOutputData(`Core ${boardCore} is already installed.`, 'info')
       return
+    }
+
+    const coreRef = coreVersion ? `${boardCore}@${coreVersion}` : boardCore
+    if (coreVersion) {
+      handleOutputData(`Installing pinned core ${coreRef} (required by a prebuilt library)...`, 'info')
+    }
+
+    // Refresh the platform index against the vendor URL before installing.
+    // Non-fatal: a transient network failure here should not mask the far
+    // more useful error that `core install` produces a moment later.
+    if (boardManagerUrl) {
+      handleOutputData(`Using vendor board index: ${boardManagerUrl}`, 'info')
+      try {
+        // `handleCoreUpdateIndex` logs at the wider 'info' | 'warning' |
+        // 'error' level set; this callback only accepts 'info' | 'error',
+        // so fold 'warning' down to 'info'.
+        await this.handleCoreUpdateIndex(
+          (chunk, level) => handleOutputData(chunk, level === 'error' ? 'error' : 'info'),
+          boardManagerUrl,
+        )
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        handleOutputData(`Warning: could not refresh the board index (${message}). Continuing.`, 'info')
+      }
     }
 
     let binaryPath = this.arduinoCliBinaryPath
@@ -1052,7 +1049,13 @@ class CompilerModule {
       binaryPath += '.exe'
     }
     return new Promise<MethodsResult<string | Buffer>>((resolve, reject) => {
-      const executeCommand = spawn(binaryPath, ['core', 'install', boardCore, ...this.arduinoCliBaseParameters])
+      const executeCommand = spawn(binaryPath, [
+        'core',
+        'install',
+        coreRef,
+        ...(boardManagerUrl ? ['--additional-urls', boardManagerUrl] : []),
+        ...this.arduinoCliBaseParameters,
+      ])
 
       let stderrData = ''
 
@@ -1514,7 +1517,25 @@ class CompilerModule {
 
     // Build the .o path list synchronously up-front so the archive members
     // land in source-file order regardless of the concurrent compile result.
-    const objectFiles = sources.map((sourcePath) => join(objDir, path.basename(sourcePath).replace(/\.cpp$/, '.o')))
+    //
+    // The `.cpp` is KEPT in the object name (`foo.cpp.o`, not `foo.o`) — the same
+    // convention arduino-cli uses for sketch objects, and on ESP8266 it decides
+    // whether the code runs from flash or from IRAM.
+    //
+    // esp8266's linker script sends code to flash by matching the OBJECT NAME:
+    //
+    //     .irom0.text : { *.c.o(.literal* .text*)
+    //                     *.cpp.o(EXCLUDE_FILE (umm_malloc.cpp.o) .literal* … .text*)
+    //                     *.cc.o(.literal* .text*)  … }
+    //
+    // Anything it does not match falls through to `.text1`, a catch-all mapped
+    // into `iram1_0_seg` — 32 KB shared with the WiFi/SDK core. Named `foo.o`,
+    // every translation unit of libOpenPLCUserLib.a landed there: measured at
+    // 7387 bytes of IRAM for a small project (glue 3781 + configuration 3149 +
+    // pou_MAIN 457), which overflowed the segment and failed the link with
+    // "section `.text1' will not fit in region `iram1_0_seg'" — a message that
+    // names neither this archive nor the reason.
+    const objectFiles = sources.map((sourcePath) => join(objDir, `${path.basename(sourcePath)}.o`))
 
     // Cap concurrent toolchain spawns at the host's logical core count.
     // An unbounded `sources.map(async …)` was dispatching one g++ per TU
@@ -1790,6 +1811,13 @@ class CompilerModule {
       ...cxxFlagsArg,
       '--library',
       precompiledLibDir,
+      // Prebuilt arduino-hal (mixed): the vendor's precompiled library. The
+      // open hal.source layer (renamed to arduino.cpp, compiled here alongside
+      // the sketch — NOT in the precompile pass) does `#include "p1am_vendor.h"`,
+      // so arduino-cli needs the lib's src/ on the include path. Passing it as a
+      // 2nd --library both resolves the boundary header and auto-links the
+      // src/<build.mcu>/lib*.a archive (the lib ships precompiled=full).
+      ...(info.precompiledLibraryDir ? ['--library', info.precompiledLibraryDir] : []),
       '--build-property',
       `compiler.libraries.ldflags=-L${precompiledArchDir} -lOpenPLCUserLib`,
       ...this.arduinoCliBaseParameters,
@@ -1885,73 +1913,8 @@ class CompilerModule {
     })
   }
 
-  /**
-   * Send a compiled program file to the runtime's `/api/upload-file`
-   * over HTTPS via a multipart/form-data POST.  Pure transport — no
-   * polling, no PLC start, no UI logging.  Used as the `uploadProgram`
-   * callback fed to the shared `deployRuntimeProgram` orchestrator.
-   *
-   * v3 callers pass `program.st` + `text/plain`; v4 callers pass the
-   * compiled zip + `application/zip`.  `cleanBuild` toggles the
-   * `?clean=1` flag the runtime honours by wiping `build/` and ccache
-   * before compiling.
-   */
-  private async sendRuntimeUpload(opts: {
-    hostname: string
-    jwtToken: string
-    filename: string
-    contentType: string
-    fileBuffer: Buffer
-    cleanBuild: boolean
-    onUploadAccepted?: (responseBody: string) => void
-  }): Promise<{ success: boolean; error?: string }> {
-    const boundary = '----WebKitFormBoundary' + Math.random().toString(36).substring(2)
-    const header = Buffer.from(
-      `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="file"; filename="${opts.filename}"\r\n` +
-        `Content-Type: ${opts.contentType}\r\n\r\n`,
-    )
-    const footer = Buffer.from(`\r\n--${boundary}--\r\n`)
-    const body = Buffer.concat([header, opts.fileBuffer, footer] as unknown as ReadonlyArray<Uint8Array>)
-
-    return new Promise<{ success: boolean; error?: string }>((resolve) => {
-      const req = https.request(
-        {
-          hostname: opts.hostname,
-          port: 8443,
-          path: opts.cleanBuild ? '/api/upload-file?clean=1' : '/api/upload-file',
-          method: 'POST',
-          headers: {
-            'Content-Type': `multipart/form-data; boundary=${boundary}`,
-            'Content-Length': body.length,
-            Authorization: `Bearer ${opts.jwtToken}`,
-          },
-          ...getRuntimeHttpsOptions(),
-        } as https.RequestOptions,
-        (res: IncomingMessage) => {
-          let data = ''
-          res.on('data', (chunk: Buffer) => {
-            data += chunk.toString()
-          })
-          res.on('end', () => {
-            if (res.statusCode === 200) {
-              opts.onUploadAccepted?.(data)
-              resolve({ success: true })
-            } else {
-              resolve({ success: false, error: data || `HTTP ${res.statusCode}` })
-            }
-          })
-        },
-      )
-      req.setTimeout(300_000, () => {
-        req.destroy()
-        resolve({ success: false, error: 'Upload request timed out after 5 minutes' })
-      })
-      req.on('error', (err: Error) => resolve({ success: false, error: err.message }))
-      req.write(body)
-      req.end()
-    })
-  }
+  // Runtime upload moved to MainProcessBridge.makeRuntimeApiUpload so it shares
+  // the single token authority (transparent refresh + retry on an expired JWT).
 
   // !! Deprecated: This method is a outdated implementation and should be removed.
   async createXmlFile(
@@ -2101,28 +2064,34 @@ class CompilerModule {
     sourceTargetFolderPath: string,
     handleOutputData: HandleOutputDataCallback,
   ): Promise<void> {
+    // Second gate, deliberately re-run here rather than trusted from
+    // `compileProgram` (DOPE-539). This step is what copies vendor C into the
+    // bundle the runtime compiles ON the PLC, and it runs late — transpile,
+    // strucpp and the v4 bundle compose happen in between, which on a large
+    // project is minutes of wall clock during which the package directory is
+    // still writable. Checking again costs one directory hash.
+    //
+    // This sits OUTSIDE the catch-all below on purpose. Every other failure in
+    // this method degrades the build and reports it; this one has to stop it,
+    // and `packageVppPlugin` in the platform port turns a throw into the
+    // `errors[]` the pipeline bails on.
+    const integrity = new PackageManagerModule().verifyBoardPackageIntegrity(boardTarget)
+    if (!integrity.ok) {
+      const message = formatPackageIntegrityError(boardTarget, integrity)
+      handleOutputData(message, 'error')
+      throw new Error(message)
+    }
+
     try {
-      const packageManager = new PackageManagerModule()
-      const installed = packageManager.listInstalled()
+      const match = new PackageManagerModule().findDeviceByBoardName(boardTarget)
 
-      let matchingPackagePath: string | null = null
-      let matchingDevice: PackageManifest['devices'][number] | null = null
-
-      for (const pkg of installed) {
-        const manifest = packageManager.getInstalledPackageManifest(pkg.packageId)
-        if (!manifest) continue
-        const device = manifest.devices.find((d) => d.name === boardTarget)
-        if (device) {
-          matchingPackagePath = pkg.path
-          matchingDevice = device
-          break
-        }
-      }
-
-      if (!matchingDevice || !matchingPackagePath) {
+      if (!match) {
         handleOutputData(`Board "${boardTarget}" is not from a VPP package, skipping VPP packaging`, 'info')
         return
       }
+
+      const matchingPackagePath = match.pkg.path
+      const matchingDevice = match.device
 
       if (matchingDevice.target.type !== 'runtime-v4') {
         handleOutputData(
@@ -2243,19 +2212,24 @@ class CompilerModule {
         handleOutputData('VPP board has no HAL configTemplate, skipping plugin config generation', 'info')
       }
 
-      // --- Step 2: Copy plugin source + generate checksum ---
+      // --- Step 2: Copy plugin payload + generate checksum ---
       const pluginEntryRelPath = matchingDevice.hal?.pluginEntry
       if (!pluginEntryRelPath) {
         handleOutputData('VPP board has no HAL pluginEntry, skipping plugin source upload', 'info')
         return
       }
 
-      // The plugin source directory is the parent directory of pluginEntry.
+      // Resolve the plugin directory. In "source" mode (default) pluginEntry is
+      // the entry source file, so the dir is its parent. In "prebuilt" mode
+      // (provisioning === 'prebuilt') pluginEntry is the directory itself,
+      // holding the precompiled .o objects plus the link-only Makefile.
       // pluginEntryRelPath is supplied by the package manifest; without
       // containment, an entry like `../../../etc` would resolve outside
       // matchingPackagePath and the recursive-copy below would slurp
       // arbitrary host files into the build's vpp_plugin directory.
-      const pluginSourceDir = join(matchingPackagePath, path.dirname(pluginEntryRelPath))
+      const isPrebuilt = matchingDevice.hal?.provisioning === 'prebuilt'
+      const pluginDirRelPath = isPrebuilt ? pluginEntryRelPath : path.dirname(pluginEntryRelPath)
+      const pluginSourceDir = join(matchingPackagePath, pluginDirRelPath)
       try {
         assertPathContained(matchingPackagePath, pluginSourceDir, 'matchingDevice.hal.pluginEntry')
       } catch (err) {
@@ -2346,7 +2320,7 @@ class CompilerModule {
       await writeFile(join(destPluginDir, 'checksum.sha256'), combinedHash + '\n', 'utf-8')
 
       handleOutputData(
-        `Copied ${copiedFiles.length} VPP plugin source file(s) to vpp_plugin/ (checksum: ${combinedHash.slice(0, 12)}...)`,
+        `Copied ${copiedFiles.length} VPP plugin ${isPrebuilt ? 'prebuilt' : 'source'} file(s) to vpp_plugin/ (checksum: ${combinedHash.slice(0, 12)}...)`,
         'info',
       )
     } catch (error) {
@@ -2375,26 +2349,12 @@ class CompilerModule {
     vendorScreenData: Record<string, unknown>,
   ): Promise<Array<{ slot: number; bytes: number[] }>> {
     try {
-      const packageManager = new PackageManagerModule()
-      const installed = packageManager.listInstalled()
+      const match = new PackageManagerModule().findDeviceByBoardName(boardTarget)
 
-      let matchingPackagePath: string | null = null
-      let matchingDevice: PackageManifest['devices'][number] | null = null
-      for (const pkg of installed) {
-        const manifest = packageManager.getInstalledPackageManifest(pkg.packageId)
-        if (!manifest) continue
-        const device = manifest.devices.find((d) => d.name === boardTarget)
-        if (device) {
-          matchingPackagePath = pkg.path
-          matchingDevice = device
-          break
-        }
-      }
+      const rawModules = match?.device.moduleSystem?.modules
+      if (!match || !rawModules || rawModules.length === 0) return []
 
-      const rawModules = matchingDevice?.moduleSystem?.modules
-      if (!matchingDevice || !matchingPackagePath || !rawModules || rawModules.length === 0) return []
-
-      const pkgPath = matchingPackagePath
+      const pkgPath = match.pkg.path
       const modules = await Promise.all(
         rawModules.map(async (m) => {
           let configScreenDefinition: unknown
@@ -2424,7 +2384,7 @@ class CompilerModule {
    * Main compile entry point.  Drives the full Step 0-13 flow
    * through the shared `runCompilePipeline` orchestrator
    * (`backend/shared/compile/pipeline.ts`); platform-specific bits
-   * (xml2st spawn, arduino-cli spawn, runtime upload) are abstracted
+   * (arduino-cli spawn, runtime upload) are abstracted
    * behind `EditorCompilerPlatformPort`.  Single source of truth
    * for compile behaviour shared with openplc-web.
    */
@@ -2434,10 +2394,17 @@ class CompilerModule {
     mainProcessBridge: {
       makeRuntimeApiRequest: <T = void>(
         ipAddress: string,
-        jwtToken: string,
         endpoint: string,
         responseParser?: (data: string) => T,
       ) => Promise<{ success: true; data?: T } | { success: false; error: string }>
+      makeRuntimeApiUpload: (opts: {
+        ipAddress: string
+        fileBuffer: Buffer
+        filename: string
+        contentType: string
+        cleanBuild: boolean
+        onUploadAccepted?: (responseBody: string) => void
+      }) => Promise<{ success: true; data: string } | { success: false; error: string }>
       /**
        * Resolve a list of project-enabled library names to parsed
        * `.stlib` archives.  Bundled libraries are always-on and
@@ -2474,6 +2441,22 @@ class CompilerModule {
       string | null | undefined,
       Record<string, unknown> | undefined,
     ]
+
+    // VPP integrity gate (DOPE-539). FIRST, before the manifest is read for
+    // anything else: from here on this method trusts the package directory for
+    // the HAL it links, the licence-store backend it injects and every
+    // capability it branches on. The import check and the project-open sweep
+    // are both behind us and neither says anything about the package as it
+    // exists right now.
+    const boardPackageIntegrity = new PackageManagerModule().verifyBoardPackageIntegrity(boardTarget)
+    if (!boardPackageIntegrity.ok) {
+      _mainProcessPort.postMessage({
+        logLevel: 'error',
+        message: `${formatPackageIntegrityError(boardTarget, boardPackageIntegrity)}\nStopping compilation process.`,
+      })
+      _mainProcessPort.close()
+      return
+    }
 
     // Resolve board info uniformly across hals.json + installed VPP
     // packages via the shared `resolveBoardSelection` helper — the
@@ -2607,6 +2590,33 @@ class CompilerModule {
             })
           }
         }
+        // An arduino-cli target CANNOT work without its HAL: `hardwareInit` /
+        // `updateInputBuffers` / `updateOutputBuffers` have no other definition,
+        // so the build either dies at link with an undefined-reference wall or —
+        // if anything ever weak-defines them — silently produces firmware that
+        // drives no I/O at all. Both were observed as "the program runs but the
+        // outputs never move", with the real cause (the board resolved without a
+        // HAL, e.g. a VPP whose manifest didn't load) reported only as a warning
+        // several hundred log lines earlier.
+        //
+        // Fail here instead, naming the board and the path, so the message says
+        // what is wrong rather than what it broke.
+        // Runtime v3 legitimately has no HAL (its on-device MatIEC compiles the
+        // ST itself and it never links Arduino firmware), so this only applies to
+        // targets that actually build a sketch.
+        if (!boardHalContent && !isRuntimeV3) {
+          const where = boardInfo.halSourceFile
+            ? `its HAL source could not be read from ${boardInfo.halSourceFile}`
+            : 'it did not resolve a HAL source file (a VPP package may have failed to load — try reinstalling it)'
+          _mainProcessPort.postMessage({
+            logLevel: 'error',
+            message:
+              `Board "${boardTarget}" cannot be compiled: ${where}. ` +
+              'Without a HAL the firmware has no hardware I/O layer.\nStopping compilation process.',
+          })
+          _mainProcessPort.close()
+          return
+        }
         // Re-key strucpp runtime headers from
         // `strucpp_runtime/include/X` into `src/X` so arduino-cli's
         // `--library src` pass finds them; also drop the board HAL
@@ -2618,6 +2628,60 @@ class CompilerModule {
           strucppRuntimeHeaders: v4Layout,
           boardHalContent,
         })
+
+        // VPP-provided license-store backend source(s). Mirrors the HAL read
+        // above: each path is an absolute one `BoardInfoResolver` produced from
+        // `device.hal.licenseStore` through the same traversal-guarded
+        // `resolvePackageRelativePath`.
+        //
+        // Unlike the HAL (which lands at the canonical `src/arduino.cpp`), these
+        // keep their distinctive basenames and land in the SKETCH directory next
+        // to `license_store.h` / `license_blob.h`, so their
+        // `#include "license_store.h"` resolves and they define the STRONG
+        // `license_store_*` symbols that override the skeleton's
+        // `license_store_weak.cpp`. Boards without a VPP backend inject nothing
+        // and link the weak default, which answers LIC_UNSUPPORTED.
+        //
+        // A read failure is a WARNING, not a hard stop, and the asymmetry with the
+        // HAL check above is deliberate: a missing HAL means no I/O at all, while a
+        // missing store backend means the board answers "cannot store a licence" —
+        // degraded, correctly reported to the editor, and still a working PLC.
+        for (const licenseStoreFile of boardInfo.licenseStoreFiles ?? []) {
+          try {
+            const content = await readFile(licenseStoreFile, 'utf-8')
+            firmwareSkeleton[`examples/Baremetal/${path.basename(licenseStoreFile)}`] = content
+            // Logged on SUCCESS, not only on failure. Without this line the build
+            // output is identical whether the backend went in or not, and the only
+            // symptom of it missing appears much later and somewhere else: the
+            // board answers LIC_UNSUPPORTED and the editor says "this device
+            // cannot store a licence" — which reads as a hardware limitation
+            // rather than a firmware that was built without the backend.
+            _mainProcessPort.postMessage({
+              logLevel: 'info',
+              message: `License store backend included: ${path.basename(licenseStoreFile)}`,
+            })
+          } catch (lsErr) {
+            _mainProcessPort.postMessage({
+              logLevel: 'warning',
+              message:
+                `Could not read license-store backend at ${licenseStoreFile}: ${getErrorMessage(lsErr)}. ` +
+                'This board will report that it cannot store a licence.',
+            })
+          }
+        }
+        // A licensable board that resolves NO backend is a manifest fault: every
+        // licensable VPP targets hardware that persists a licence, so the storage
+        // source is not optional for one. Saying it here is far cheaper than
+        // deducing it from a badge three steps later.
+        if (boardInfo.capabilities?.isLicensable === true && (boardInfo.licenseStoreFiles ?? []).length === 0) {
+          _mainProcessPort.postMessage({
+            logLevel: 'warning',
+            message:
+              `Board "${boardTarget}" belongs to a licensed VPP but its manifest declares no ` +
+              '`hal.licenseStore`. Every licensed VPP needs one, so this is a packaging fault: the ' +
+              'firmware will link the weak default and report that its licence storage is missing.',
+          })
+        }
       }
       try {
         // `devices/pin-mapping.json` ships in one of two shapes (the
@@ -2670,7 +2734,6 @@ class CompilerModule {
     // --- Build the editor's CompilerPlatformPort implementation ---
     const platformPort = createEditorCompilerPlatformPort(
       {
-        handleTranspileXMLtoST: this.handleTranspileXMLtoST.bind(this),
         handleCompileArduinoProgram: this.handleCompileArduinoProgram.bind(this),
         handleUploadProgram: this.handleUploadProgram.bind(this),
         handleCoreInstallation: this.handleCoreInstallation.bind(this),
@@ -2687,7 +2750,11 @@ class CompilerModule {
         cleanBuild: cleanBuild ?? false,
         mainProcessBridge,
         compressSourceFolder: (folderPath: string) => this.compressSourceFolder(folderPath),
-        sendRuntimeUpload: (opts) => this.sendRuntimeUpload(opts),
+        // VPP runtime floor (DOPE-448). Constructed per call rather than
+        // held on the class because the registry is read off disk and may
+        // have changed since the last compile (a package installed or
+        // removed mid-session).
+        getVppRuntimeFloor: (board: string) => new PackageManagerModule().getRuntimeFloorForBoard(board),
         pollTimeoutMs: CompilerModule.COMPILATION_STATUS_TIMEOUT_MS,
         pollIntervalMs: CompilerModule.COMPILATION_STATUS_POLL_INTERVAL_MS,
         startTimeoutMs: POST_BUILD_START_TIMEOUT_MS,
@@ -2717,6 +2784,8 @@ class CompilerModule {
         const deviceConfig = await CompilerModule.readJSONFile<DeviceConfiguration>(devicesConfigurationFilePath)
         const vendorScreenData = deviceConfig.vendorScreenData ?? {}
         vppModbusState = {
+          serial: vendorScreenData['serial'] as VppModbusScreenState['serial'],
+          network: vendorScreenData['network'] as VppModbusScreenState['network'],
           modbus_rtu: vendorScreenData['modbus_rtu'] as VppModbusScreenState['modbus_rtu'],
           modbus_tcp: vendorScreenData['modbus_tcp'] as VppModbusScreenState['modbus_tcp'],
         }
@@ -2768,6 +2837,12 @@ class CompilerModule {
         communicationPort: communicationPort ?? undefined,
         ...(vppModbusState ? { vppModbusState } : {}),
         vendorScreenData: effectiveVendorScreenData,
+        // Compared against the `minEditorVersion` a runtime publishes at
+        // `/api/capabilities` (DOPE-448). Injected because the pipeline
+        // lives in `backend/shared/`, which the layer rules keep out of
+        // `frontend/data/` — which build is running is a fact about the
+        // host app, not about the compile.
+        editorVersion: APP_VERSION,
       },
       platformPort,
       (event) => {
@@ -2842,6 +2917,21 @@ class CompilerModule {
 
     const [projectPath, boardTarget, projectData] = args as [string, string, PLCProjectData]
 
+    // Same gate as `compileProgram` (DOPE-539). The debug build is a smaller
+    // consumer of the package — it resolves the board and its debug spec — but
+    // it is still a build the user runs against a live device, and letting it
+    // through on a package the normal compile just refused would only teach
+    // that the check is avoidable.
+    const debugPackageIntegrity = new PackageManagerModule().verifyBoardPackageIntegrity(boardTarget)
+    if (!debugPackageIntegrity.ok) {
+      _mainProcessPort.postMessage({
+        logLevel: 'error',
+        message: `${formatPackageIntegrityError(boardTarget, debugPackageIntegrity)}\nStopping debug compilation process.`,
+      })
+      _mainProcessPort.close()
+      return
+    }
+
     const debugResolver = await this.#createBoardInfoResolver()
     const { boardRuntime } = debugResolver.resolve(boardTarget)
     const normalizedProjectPath = projectPath.replace('project.json', '')
@@ -2882,109 +2972,45 @@ class CompilerModule {
       return
     }
 
-    if (isNewTranspilerEnabled()) {
-      // JSON → ST in-process via `st-transpiler`.  Mirrors what
-      // `editor-compiler-platform-port.transpileToSt` does for the
-      // shared pipeline path, scoped down to the debug compile here.
+    // Project -> ST via the in-process transpiler. The resulting program.st
+    // is what STruC++ reads downstream.
+    type DebugStResult = { ok: true; programSt: string } | { ok: false; programSt?: undefined; error: string }
+
+    const runDebugInProcess = (): DebugStResult => {
       try {
         const ir = fromSchemaShape(projectData as unknown as SchemaProjectData)
         const result = runJsonTranspiler(ir)
         if (result.programSt === null || result.errors.length > 0) {
-          const message = result.errors.join('\n') || 'Failed to generate Structured Text'
-          _mainProcessPort.postMessage({
-            logLevel: 'error',
-            message: `${message}\nStopping debug compilation process.`,
-          })
-          _mainProcessPort.close()
-          return
+          return { ok: false, error: result.errors.join('\n') || 'Failed to generate Structured Text' }
         }
-        for (const warning of result.warnings) {
-          _mainProcessPort.postMessage({ logLevel: 'info', message: warning })
-        }
-        await mkdir(sourceTargetFolderPath, { recursive: true })
-        const programStPath = join(sourceTargetFolderPath, 'program.st')
-        await writeFile(programStPath, result.programSt, 'utf-8')
-        _mainProcessPort.postMessage({ logLevel: 'info', message: `ST file generated at: ${programStPath}` })
+        return { ok: true, programSt: result.programSt }
       } catch (error) {
-        _mainProcessPort.postMessage({
-          logLevel: 'error',
-          message: `Error transpiling JSON to ST: ${getErrorMessage(error)}\nStopping debug compilation process.`,
-        })
-        _mainProcessPort.close()
-        return
-      }
-    } else {
-      try {
-        const generateXMLResult = await this.handleGenerateXMLfromJSON(sourceTargetFolderPath, projectData)
-        _mainProcessPort.postMessage({
-          logLevel: 'info',
-          message: `Generated XML from JSON at: ${generateXMLResult.data?.xmlPath as string}`,
-        })
-      } catch (error) {
-        _mainProcessPort.postMessage({
-          logLevel: 'error',
-          message: `Error generating XML from JSON: ${error as string}\nStopping debug compilation process.`,
-        })
-        _mainProcessPort.close()
-        return
-      }
-
-      const generatedXMLFilePath = join(sourceTargetFolderPath, 'plc.xml')
-      try {
-        await this.handleTranspileXMLtoST(
-          generatedXMLFilePath,
-          (data, logLevel) => {
-            _mainProcessPort.postMessage({ logLevel, message: data })
-          },
-          ['--keep-structs'],
-        )
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        if (message.includes('GLIBC_') || message.includes('Failed to load Python shared library')) {
-          _mainProcessPort.postMessage({
-            logLevel: 'warning',
-            message: `Legacy xml2st failed due to system incompatibility (${message.split('\n')[0]}). Falling back to new st-transpiler...`,
-          })
-          try {
-            const ir = fromSchemaShape(projectData as unknown as SchemaProjectData)
-            const result = runJsonTranspiler(ir)
-            if (result.programSt === null || result.errors.length > 0) {
-              const msg = result.errors.join('\n') || 'Failed to generate Structured Text'
-              _mainProcessPort.postMessage({
-                logLevel: 'error',
-                message: `${msg}\nStopping debug compilation process.`,
-              })
-              _mainProcessPort.close()
-              return
-            }
-            for (const warning of result.warnings) {
-              _mainProcessPort.postMessage({ logLevel: 'info', message: warning })
-            }
-            await mkdir(sourceTargetFolderPath, { recursive: true })
-            const programStPath = join(sourceTargetFolderPath, 'program.st')
-            await writeFile(programStPath, result.programSt, 'utf-8')
-            _mainProcessPort.postMessage({ logLevel: 'info', message: `ST file generated at: ${programStPath}` })
-            // Success! Continue with the rest of the function if needed, but wait,
-            // the rest of the function is actually after the catch block?
-            // No, the catch block is for handleTranspileXMLtoST.
-          } catch (stError) {
-            _mainProcessPort.postMessage({
-              logLevel: 'error',
-              message: `Error transpiling JSON to ST (fallback): ${getErrorMessage(stError)}\nStopping debug compilation process.`,
-            })
-            _mainProcessPort.close()
-            return
-          }
-        } else {
-          _mainProcessPort.postMessage({
-            logLevel: 'error',
-            message: `Error transpiling XML to ST: ${message}\nStopping debug compilation process.`,
-          })
-          _mainProcessPort.close()
-          return
-        }
+        return { ok: false, error: `st-transpiler failed: ${getErrorMessage(error)}` }
       }
     }
+
+    const programStPath = join(sourceTargetFolderPath, 'program.st')
+    try {
+      await mkdir(sourceTargetFolderPath, { recursive: true })
+      const stResult = runDebugInProcess()
+      if (!stResult.ok) {
+        _mainProcessPort.postMessage({
+          logLevel: 'error',
+          message: `${stResult.error}\nStopping debug compilation process.`,
+        })
+        _mainProcessPort.close()
+        return
+      }
+      await writeFile(programStPath, stResult.programSt, 'utf-8')
+    } catch (error) {
+      _mainProcessPort.postMessage({
+        logLevel: 'error',
+        message: `Error writing ST file: ${getErrorMessage(error)}\nStopping debug compilation process.`,
+      })
+      _mainProcessPort.close()
+      return
+    }
+    _mainProcessPort.postMessage({ logLevel: 'info', message: `ST file generated at: ${programStPath}` })
 
     try {
       await this.copyStaticFiles(compilationPath, boardRuntime)
@@ -3091,15 +3117,10 @@ class CompilerModule {
    *   1. Read `<projectPath>/library.json` from disk (the manifest
    *      tab's surgical save has already written the live buffer
    *      ahead of this call — Phase 5).
-   *   2. `prepareXmlForLibraryBuild` validates the manifest and
-   *      emits the XML xml2st consumes.  Manifest errors fail fast
-   *      here without spawning xml2st.
-   *   3. Persist plc.xml under `<projectPath>/build/library/src/`
-   *      and run the existing `handleTranspileXMLtoST` helper so
-   *      this path shares the xml2st spawn / error-handling code
-   *      the program build already uses.
-   *   4. Read xml2st's program.st back and hand it +
-   *      knownPous + manifest to `libraryBuildFromTranspiledSt`,
+   *   2. Validate the manifest.  Manifest errors fail fast here.
+   *   3-4. Transpile the library's POUs to ST via the in-process
+   *      transpiler (through the desktop library build port) and hand
+   *      the ST + knownPous + manifest to `libraryBuildFromTranspiledSt`,
    *      which drops the synthetic stub and calls strucpp's
    *      `compileStlib`.
    *   5. Write the archive (same `JSON.stringify(archive, null, 2)`
@@ -3136,7 +3157,6 @@ class CompilerModule {
     // glue the library build needs — every stage decision lives in
     // the shared orchestrator from here on.
     const libraryPort = createDesktopLibraryBuildPort({
-      transpileXmlToSt: (xmlPath, log, extraArgs) => this.handleTranspileXMLtoST(xmlPath, log, extraArgs),
       loadEnabledArchives: (names) => mainProcessBridge.loadEnabledArchives(names),
       runVerificationCompile: ({ projectPath: p, verifyProjectData: v, emit }) =>
         this.runVerificationCompile(p, v as PLCProjectData, mainProcessBridge, (message, logLevel) =>

@@ -9,6 +9,7 @@ import {
 } from '../../../components/_atoms/graphical-editor/ladder/node-builders'
 import type { LadderBlockConnectedVariables } from '../../../components/_atoms/graphical-editor/ladder/utils/types'
 import { removeElements } from '../../../components/_molecules/graphical-editor/ladder/rung/ladder-utils/elements'
+import { deriveHandleBranches } from '../../../components/_molecules/graphical-editor/ladder/rung/ladder-utils/elements/handle-branch'
 import { LadderFlowSlice, LadderFlowState } from './types'
 import { duplicateLadderRung } from './utils'
 
@@ -56,9 +57,20 @@ export const createLadderFlowSlice: StateCreator<LadderFlowSlice, [], [], Ladder
               }))
             : flow.rungs.map((rung) => ({ ...rung, selectedNodes: [] }))
 
+          // handleBranches (the index of contacts/coils wired to a block's
+          // secondary handles, e.g. CTUD CD/QD) is runtime-only state — it is
+          // NOT persisted in the .ld. Without rebuilding it on load, a project
+          // containing handle branches comes back with an empty index and the
+          // first branch-aware edit (e.g. deleting a coil on a block output)
+          // corrupts the diagram. Reconstruct it from the graph here.
+          const rungsWithBranches = rungs.map((rung) => ({
+            ...rung,
+            handleBranches: deriveHandleBranches(rung),
+          }))
+
           // Reset updated to false on load — the flow is being loaded from a saved project.
           // Only mark as updated if legacy data was migrated so the next save writes the new format.
-          const newFlow = { ...flow, rungs, updated: needsMigration }
+          const newFlow = { ...flow, rungs: rungsWithBranches, updated: needsMigration }
 
           if (flowIndex === -1) {
             ladderFlows.push(newFlow)
@@ -282,7 +294,7 @@ export const createLadderFlowSlice: StateCreator<LadderFlowSlice, [], [], Ladder
         }),
       )
     },
-    updateNode({ editorName, node, nodeId, rungId }) {
+    updateNode({ editorName, node, nodeId, rungId, transient }) {
       setState(
         produce(({ ladderFlows }: LadderFlowState) => {
           const flow = ladderFlows.find((flow) => flow.name === editorName)
@@ -295,7 +307,26 @@ export const createLadderFlowSlice: StateCreator<LadderFlowSlice, [], [], Ladder
           if (nodeIndex === -1) return
 
           rung.nodes[nodeIndex] = node
-          flow.updated = true
+          if (!transient) flow.updated = true
+        }),
+      )
+    },
+    updateNodes(updates) {
+      setState(
+        produce(({ ladderFlows }: LadderFlowState) => {
+          for (const { editorName, node, nodeId, rungId } of updates) {
+            const flow = ladderFlows.find((flow) => flow.name === editorName)
+            if (!flow) continue
+
+            const rung = flow.rungs.find((rung) => rung.id === rungId)
+            if (!rung) continue
+
+            const nodeIndex = rung.nodes.findIndex((n) => n.id === nodeId)
+            if (nodeIndex === -1) continue
+
+            rung.nodes[nodeIndex] = node
+            flow.updated = true
+          }
         }),
       )
     },
@@ -308,19 +339,12 @@ export const createLadderFlowSlice: StateCreator<LadderFlowSlice, [], [], Ladder
           const rung = flow.rungs.find((rung) => rung.id === rungId)
           if (!rung) return
 
-          rung.nodes.push(node)
-          rung.nodes = rung.nodes.map((n) => {
-            if (n.id === node.id) {
-              return {
-                ...n,
-                selected: true,
-              }
-            }
-            return {
-              ...n,
-              selected: false,
-            }
-          })
+          // Conditional in-place writes: immer only copies nodes whose values
+          // actually change, so unchanged siblings keep their identity.
+          for (const n of rung.nodes) {
+            if (n.selected !== false) n.selected = false
+          }
+          rung.nodes.push({ ...node, selected: true })
 
           flow.updated = true
         }),
@@ -353,59 +377,28 @@ export const createLadderFlowSlice: StateCreator<LadderFlowSlice, [], [], Ladder
           if (!rung) return
 
           const selectedNodes = nodes
-          if (!rung.selectedNodes) rung.selectedNodes = []
           rung.selectedNodes = selectedNodes
 
-          if (selectedNodes.length > 1) {
-            rung.nodes = rung.nodes.map((node) => {
-              if (selectedNodes.find((n) => n.id === node.id)) {
-                return {
-                  ...node,
-                  selected: true,
-                  draggable: false,
-                }
-              }
-              return {
-                ...node,
-                selected: false,
-                draggable: false,
-              }
-            })
-          } else {
-            rung.nodes = rung.nodes.map((node) => {
-              if (selectedNodes.find((n) => n.id === node.id)) {
-                return {
-                  ...node,
-                  selected: true,
-                  draggable: (node.data as { draggable?: boolean }).draggable,
-                }
-              }
-              return {
-                ...node,
-                selected: false,
-                draggable: (node.data as { draggable?: boolean }).draggable,
-              }
-            })
+          // Conditional in-place writes: immer only copies nodes whose values
+          // actually change, so unchanged siblings (and untouched rungs below)
+          // keep their identity instead of the previous all-rungs rebuild.
+          const multiSelect = selectedNodes.length > 1
+          for (const node of rung.nodes) {
+            const isSelected = selectedNodes.some((n) => n.id === node.id)
+            const draggable = multiSelect ? false : (node.data as { draggable?: boolean }).draggable
+            if (node.selected !== isSelected) node.selected = isSelected
+            if (node.draggable !== draggable) node.draggable = draggable
           }
 
           if (selectedNodes.length > 0) {
-            flow.rungs = flow.rungs.map((r) => {
-              const changedRung = r.id === rungId
-
-              if (changedRung) {
-                return { ...rung }
-              } else {
-                return {
-                  ...r,
-                  selectedNodes: [],
-                  nodes: r.nodes.map((node) => ({
-                    ...node,
-                    selected: false,
-                    draggable: false,
-                  })),
-                }
+            for (const r of flow.rungs) {
+              if (r.id === rungId) continue
+              if (!r.selectedNodes || r.selectedNodes.length > 0) r.selectedNodes = []
+              for (const node of r.nodes) {
+                if (node.selected !== false) node.selected = false
+                if (node.draggable !== false) node.draggable = false
               }
-            })
+            }
           }
         }),
       )
@@ -483,6 +476,14 @@ export const createLadderFlowSlice: StateCreator<LadderFlowSlice, [], [], Ladder
 
           const rung = flow.rungs.find((rung) => rung.id === rungId)
           if (!rung) return
+
+          // Skip value-equal writes so RungBody's bounds effect doesn't churn
+          // the rung's identity every time it recomputes the same extent.
+          if (
+            rung.reactFlowViewport?.[0] === reactFlowViewport[0] &&
+            rung.reactFlowViewport?.[1] === reactFlowViewport[1]
+          )
+            return
 
           rung.reactFlowViewport = reactFlowViewport
         }),

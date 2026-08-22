@@ -74,6 +74,68 @@ describe('parseProjectFiles — basic', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Legacy alias → single-field location migration (foldLegacyVariableAliases)
+// ---------------------------------------------------------------------------
+
+describe('parseProjectFiles — legacy alias migration', () => {
+  it('folds a JSON POU variable with a non-empty alias into its location', () => {
+    // Old two-field model: an alias-bound variable stored the resolved
+    // %address in `location` and the alias name in `alias`.  The single-
+    // field model keeps only the alias name in `location`.
+    const legacyPou = JSON.stringify({
+      type: 'program',
+      data: {
+        name: 'Legacy',
+        variables: [
+          {
+            name: 'sensor',
+            class: 'local',
+            type: { definition: 'base-type', value: 'BOOL' },
+            location: '%IX0.0',
+            alias: 'flow_sensor',
+            documentation: '',
+          },
+        ],
+        body: { language: 'st', value: '' },
+        documentation: '',
+      },
+    })
+    const pouFiles: RawProjectFile[] = [{ relativePath: 'pous/programs/Legacy.json', content: legacyPou }]
+    const result = parseProjectFiles('/p', makeProjectJson(), makeDeviceConfig(), makePinMapping(), pouFiles, [], [])
+    const variable = result.projectData.pous[0].interface?.variables[0]
+    // Alias name folded into location; the `alias` field is gone.
+    expect(variable?.location).toBe('flow_sensor')
+    expect('alias' in (variable as unknown as Record<string, unknown>)).toBe(false)
+  })
+
+  it('leaves a manual (empty-alias) JSON POU variable location untouched', () => {
+    const legacyPou = JSON.stringify({
+      type: 'program',
+      data: {
+        name: 'Manual',
+        variables: [
+          {
+            name: 'coil',
+            class: 'local',
+            type: { definition: 'base-type', value: 'BOOL' },
+            location: '%QX0.0',
+            alias: '',
+            documentation: '',
+          },
+        ],
+        body: { language: 'st', value: '' },
+        documentation: '',
+      },
+    })
+    const pouFiles: RawProjectFile[] = [{ relativePath: 'pous/programs/Manual.json', content: legacyPou }]
+    const result = parseProjectFiles('/p', makeProjectJson(), makeDeviceConfig(), makePinMapping(), pouFiles, [], [])
+    const variable = result.projectData.pous[0].interface?.variables[0]
+    // Empty alias is not a binding — the manual %address is preserved.
+    expect(variable?.location).toBe('%QX0.0')
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Line 79 — detectPouTypeFromPath: function-block and function detection
 // ---------------------------------------------------------------------------
 
@@ -147,6 +209,60 @@ describe('parseProjectFiles — fallback POU creation', () => {
     expect(result.projectData.pous[0].name).toBe('broken')
     // The fallback should extract variablesText
     expect(result.projectData.pous[0].variablesText).toBeDefined()
+    consoleSpy.mockRestore()
+  })
+
+  it('derives the fallback name from the basename even for Windows backslash paths', () => {
+    // The desktop reader builds relativePaths with path.join → backslashes on
+    // Windows. A parse failure must still yield the bare basename, not the whole
+    // `pous\functions\...` path (the origin of the deleting-function corruption).
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const pouFiles: RawProjectFile[] = [
+      {
+        relativePath: 'pous\\functions\\Siren_FC.st',
+        // Missing END_FUNCTION / return type → parser throws → fallback.
+        content: 'FUNCTION Siren_FC\nVAR_INPUT\n  x : INT;\nEND_VAR\nbody',
+      },
+    ]
+    const result = parseProjectFiles('/p', makeProjectJson(), makeDeviceConfig(), makePinMapping(), pouFiles, [], [])
+    expect(result.projectData.pous).toHaveLength(1)
+    expect(result.projectData.pous[0].name).toBe('Siren_FC')
+    consoleSpy.mockRestore()
+  })
+
+  it('warns and preserves declarations when a PROGRAM has a located interface-class variable (issue #904)', () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const pouFiles: RawProjectFile[] = [
+      {
+        relativePath: 'pous/programs/main.st',
+        content:
+          'PROGRAM main\nVAR_OUTPUT\n  Q1 : BOOL AT %QX0.0;\nEND_VAR\nVAR\n  latch : RS;\nEND_VAR\n\n\nEND_PROGRAM',
+      },
+    ]
+    const result = parseProjectFiles('/p', makeProjectJson(), makeDeviceConfig(), makePinMapping(), pouFiles, [], [])
+    // Falls back: the structured variable list is empty, but the raw
+    // declarations survive in variablesText for in-app repair.
+    expect(result.projectData.pous).toHaveLength(1)
+    expect(result.projectData.pous[0].interface?.variables).toEqual([])
+    expect(result.projectData.pous[0].variablesText).toContain('AT %QX0.0')
+    // The failure is surfaced: names the POU and file, states the offending
+    // rule, and points at the repair path.
+    expect(result.warnings).toBeDefined()
+    const warning = result.warnings!.find((w) => w.includes('pous/programs/main.st'))
+    expect(warning).toContain('POU "main"')
+    expect(warning).toMatch(/Location \("AT"\) is not allowed for variables of class "OUTPUT"/)
+    expect(warning).toContain('code view')
+    consoleSpy.mockRestore()
+  })
+
+  it('warns with a partial-data message when a graphical POU fails to parse', () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const pouFiles: RawProjectFile[] = [
+      { relativePath: 'pous/programs/FbdPou.fbd', content: 'PROGRAM FbdPou\nnot valid json\nEND_PROGRAM' },
+    ]
+    const result = parseProjectFiles('/p', makeProjectJson(), makeDeviceConfig(), makePinMapping(), pouFiles, [], [])
+    expect(result.warnings).toBeDefined()
+    expect(result.warnings!.some((w) => w.includes('FbdPou') && w.includes('partial data'))).toBe(true)
     consoleSpy.mockRestore()
   })
 
@@ -705,5 +821,91 @@ describe('parseProjectFiles — POU name derivation', () => {
     const result = parseProjectFiles('/p', makeProjectJson(), makeDeviceConfig(), makePinMapping(), pouFiles, [], [])
     expect(result.projectData.pous).toHaveLength(1)
     expect(result.projectData.pous[0].name).toBe('Derived')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Data type files (datatypes/<Name>.dt) — hydration matrix (DOPE-533)
+// ---------------------------------------------------------------------------
+
+describe('data type file hydration', () => {
+  const legacyEnum = {
+    name: 'Color',
+    derivation: 'enumerated',
+    initialValue: '',
+    values: [{ description: 'Red' }, { description: 'Green' }],
+  }
+
+  const parse = (dataTypeFiles: RawProjectFile[], jsonDataTypes: unknown[] = []) =>
+    parseProjectFiles(
+      '/p',
+      makeProjectJson({ dataTypes: jsonDataTypes }),
+      makeDeviceConfig(),
+      makePinMapping(),
+      [],
+      [],
+      [],
+      '',
+      dataTypeFiles,
+    )
+
+  it('parses .dt files into dataTypes (files win over legacy JSON)', () => {
+    const result = parse(
+      [{ relativePath: 'datatypes/Mode.dt', content: 'TYPE\n  Mode : (Auto, Manual);\nEND_TYPE\n' }],
+      [legacyEnum],
+    )
+    expect(result.projectData.dataTypes).toEqual([
+      {
+        name: 'Mode',
+        derivation: 'enumerated',
+        values: [{ description: 'Auto' }, { description: 'Manual' }],
+        initialValue: '',
+      },
+    ])
+    expect(result.warnings).toBeUndefined()
+    expect(result.unparsedDataTypeFiles).toBeUndefined()
+  })
+
+  it('falls back to legacy project.json dataTypes when no .dt files exist', () => {
+    const result = parse([], [legacyEnum])
+    expect(result.projectData.dataTypes).toEqual([legacyEnum])
+  })
+
+  it('yields an empty list when neither files nor legacy JSON carry types', () => {
+    const result = parse([], [])
+    expect(result.projectData.dataTypes).toEqual([])
+  })
+
+  it('preserves unparseable .dt files raw with a warning instead of dropping them', () => {
+    const broken = { relativePath: 'datatypes/Broken.dt', content: 'TYPE\n  Broken : ???;\nEND_TYPE\n' }
+    const result = parse([broken, { relativePath: 'datatypes/Ok.dt', content: 'TYPE\n  Ok : (A);\nEND_TYPE\n' }])
+    expect(result.projectData.dataTypes.map((d) => d.name)).toEqual(['Ok'])
+    expect(result.unparsedDataTypeFiles).toEqual([broken])
+    expect(result.warnings?.some((w) => w.includes('datatypes/Broken.dt'))).toBe(true)
+  })
+
+  it('treats a declared-name/file-name mismatch as unparseable (raw preserved)', () => {
+    const mismatched = { relativePath: 'datatypes/Alpha.dt', content: 'TYPE\n  Beta : (A);\nEND_TYPE\n' }
+    const result = parse([mismatched])
+    expect(result.projectData.dataTypes).toEqual([])
+    expect(result.unparsedDataTypeFiles).toEqual([mismatched])
+    expect(result.warnings?.some((w) => w.includes('does not match'))).toBe(true)
+  })
+
+  it('keeps struct field documentation through schema validation (legacy JSON)', () => {
+    const structWithDoc = {
+      name: 'Motor',
+      derivation: 'structure',
+      variable: [
+        {
+          name: 'speed',
+          type: { definition: 'base-type', value: 'INT' },
+          initialValue: { simpleValue: { value: '' } },
+          documentation: 'target speed in rpm',
+        },
+      ],
+    }
+    const result = parse([], [structWithDoc])
+    expect(result.projectData.dataTypes).toEqual([structWithDoc])
   })
 })

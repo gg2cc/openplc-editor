@@ -1,6 +1,5 @@
 import type {
   Architecture,
-  DebugConnectionType,
   DebugTreeNode,
   FbInstanceInfo,
   Platform,
@@ -39,6 +38,7 @@ export type WorkspaceProjectTreeLeafType =
   | 'package-manager'
   | 'library-manager'
   | 'library-manifest'
+  | 'user-management'
   | 'ethercat-device'
   | null
 
@@ -96,10 +96,6 @@ export type WorkspaceState = {
     debugGraphList: string[]
     debugDataStale: boolean
     debugMd5Mismatch: { runtimeMd5: string; localMd5: string } | null
-    /** Active transport for the running debug session — drives the
-     *  per-poll batch size and any other transport-specific behaviour.
-     *  Null when no session is active. */
-    debugConnectionType: DebugConnectionType | null
     /** Target's native byte order for multi-byte variable values on
      *  the wire.  Detected from the 0xDEAD sentinel in the MD5
      *  response: LE target writes the trailer as `[0xAD, 0xDE]`, BE
@@ -171,8 +167,8 @@ export type WorkspaceActions = {
   setDebuggerTargetIp: (targetIp: string | null) => void
   setDebugCContent: (content: string | null) => void
   setDebugVariableIndexes: (indexes: Map<string, number>) => void
-  setDebugBoolValues: (values: Map<string, string>) => void
-  setDebugNonBoolValues: (values: Map<string, string>) => void
+  /** Merges polled values into both maps in a single store commit per poll cycle. */
+  setDebugValues: (values: { boolValues?: Map<string, string>; nonBoolValues?: Map<string, string> }) => void
   setDebugForcedVariables: (forced: Map<string, boolean>) => void
   setDebugTick: (tick: number) => void
   setDebugVariableTree: (tree: Map<string, DebugTreeNode>) => void
@@ -184,7 +180,6 @@ export type WorkspaceActions = {
   setDebugGraphList: (list: string[]) => void
   setDebugDataStale: (stale: boolean) => void
   setDebugMd5Mismatch: (mismatch: { runtimeMd5: string; localMd5: string } | null) => void
-  setDebugConnectionType: (connectionType: DebugConnectionType | null) => void
   setDebugTargetEndian: (endian: 'le' | 'be') => void
   clearDebugState: () => void
   clearFbDebugContext: () => void

@@ -36,12 +36,20 @@
 import type { Location, LocationLink } from 'vscode-languageserver-protocol'
 
 import type { PLCDataType } from '../../../middleware/shared/ports/types'
+import { sanitizeAxisName, softMotionAxisNames } from '../../../middleware/shared/utils/ethercat'
 import { openPLCStoreBase } from '../../store'
 import { CreateEditorObjectFromTab } from '../../store/slices/tabs/utils'
-import { serializeDataTypesToLines } from '../../utils/PLC/data-type-serializer'
+import { isDataTypeFilesEnabled } from '../../utils/feature-flags'
+import { dataTypeLineSpans } from '../../utils/PLC/data-type-serializer'
 import { getBodyLineOffset } from '../lsp-shared/body-offsets'
 import { normaliseLocation, routeToPou, routeToPouBody, routeToPouPreamble } from '../lsp-shared/definition-redirect'
-import { DATA_TYPES_URI, parsePouUri } from './types'
+import {
+  DATA_TYPES_URI,
+  DT_VIEW_FRAME_LINE_COUNT,
+  parsePouUri,
+  RESOURCE_GLOBALS_URI,
+  SOFTMOTION_GLOBALS_URI,
+} from './types'
 
 /**
  * Map an LSP line in the synthesised datatypes document to the
@@ -55,18 +63,18 @@ import { DATA_TYPES_URI, parsePouUri } from './types'
  * line counts that drift the moment a new field separator or
  * derivation lands on disk.
  */
-function findDataTypeAtLine(lspLine: number, dataTypes: PLCDataType[]): PLCDataType | null {
+function findDataTypeAtLine(
+  lspLine: number,
+  dataTypes: PLCDataType[],
+): { dataType: PLCDataType; lineInEntry: number } | null {
   // Synthesised doc: line 0 is `TYPE`, entries start at line 1.
   if (lspLine < 1) return null
-  const entries = serializeDataTypesToLines(dataTypes)
   const byName = new Map(dataTypes.map((dt) => [dt.name, dt]))
-  let cursor = 1
-  for (const entry of entries) {
-    const span = entry.lines.length
-    if (lspLine >= cursor && lspLine < cursor + span) {
-      return byName.get(entry.name) ?? null
+  for (const [name, span] of dataTypeLineSpans(dataTypes)) {
+    if (lspLine >= span.start && lspLine < span.start + span.length) {
+      const dataType = byName.get(name)
+      return dataType ? { dataType, lineInEntry: lspLine - span.start } : null
     }
-    cursor += span
   }
   return null
 }
@@ -102,8 +110,122 @@ function openDataTypeEditor(dataType: PLCDataType): boolean {
   return true
 }
 
+/**
+ * Open the type's tab in code mode at a Monaco position in its `.dt`
+ * view. Falls back to the form tab when the code view isn't built into
+ * this release.
+ */
+function routeToDataTypeCodeView(dataType: PLCDataType, monacoLine: number, monacoColumn: number): boolean {
+  if (!openDataTypeEditor(dataType)) return false
+  if (!isDataTypeFilesEnabled()) return true
+  const {
+    editorActions: { setEditorCursor, updateModelStructureForName },
+  } = openPLCStoreBase.getState()
+  updateModelStructureForName(dataType.name, { display: 'code' })
+  setEditorCursor(dataType.name, {
+    lineNumber: monacoLine,
+    column: monacoColumn,
+    offset: 0,
+    target: 'data-type',
+  })
+  return true
+}
+
+/**
+ * Open the EtherCAT device (drive) editor for `deviceId` on `busName`, mirroring
+ * the project-tree click path. Used to redirect go-to-definition on a SoftMotion
+ * axis to its drive configuration screen instead of the synthesised globals doc.
+ */
+function openDeviceEditor(name: string, busName: string, deviceId: string): boolean {
+  const tabProps: Parameters<typeof CreateEditorObjectFromTab>[0] = {
+    name,
+    path: `/devices/remote/${busName}/devices/${deviceId}`,
+    elementType: { type: 'ethercat-device', busName, deviceId },
+  }
+  const {
+    editorActions: { setEditor, addModel, getEditorFromEditors },
+    tabsActions: { updateTabs, setSelectedTab },
+  } = openPLCStoreBase.getState()
+  updateTabs(tabProps)
+  const existing = getEditorFromEditors(name)
+  if (existing) {
+    addModel(existing)
+    setEditor(existing)
+  } else {
+    const model = CreateEditorObjectFromTab(tabProps)
+    addModel(model)
+    setEditor(model)
+  }
+  setSelectedTab(name)
+  return true
+}
+
+/**
+ * Redirect a go-to-definition landing in the synthesised SoftMotion axis-globals
+ * document to the drive that owns the axis. The document is a bare `VAR_GLOBAL`
+ * block: line 0 is `VAR_GLOBAL`, line N (1-based) is axis N-1 — the same order
+ * as `softMotionAxisNames`. Returns false when the line doesn't map to an axis
+ * or no drive matches (caller falls back to Monaco's default).
+ */
+function redirectSoftMotionAxis(lspLine: number): boolean {
+  if (lspLine < 1) return false
+  const data = openPLCStoreBase.getState().project.data
+  const axisName = softMotionAxisNames(data)[lspLine - 1]
+  if (!axisName) return false
+  for (const rd of data.remoteDevices ?? []) {
+    if (rd.protocol !== 'ethercat') continue
+    for (const dev of rd.ethercatConfig?.devices ?? []) {
+      if (sanitizeAxisName(dev.name) === axisName) {
+        return openDeviceEditor(dev.name, rd.name, dev.id)
+      }
+    }
+  }
+  return false
+}
+
+/**
+ * Open the Resource editor (where configuration-level globals are declared),
+ * mirroring the project-tree click path. Used to redirect go-to-definition on a
+ * user global to the globals table instead of the synthesised globals doc.
+ */
+function openResourceEditor(): boolean {
+  const tabProps: Parameters<typeof CreateEditorObjectFromTab>[0] = {
+    name: 'Resource',
+    path: '/data/configuration/resource',
+    elementType: { type: 'resource' },
+  }
+  const {
+    editorActions: { setEditor, addModel, getEditorFromEditors },
+    tabsActions: { updateTabs, setSelectedTab },
+  } = openPLCStoreBase.getState()
+  updateTabs(tabProps)
+  const existing = getEditorFromEditors('Resource')
+  if (existing) {
+    addModel(existing)
+    setEditor(existing)
+  } else {
+    const model = CreateEditorObjectFromTab(tabProps)
+    addModel(model)
+    setEditor(model)
+  }
+  setSelectedTab('Resource')
+  return true
+}
+
 export function redirectDefinitionToStore(loc: Location | LocationLink): boolean {
   const target = normaliseLocation(loc)
+
+  // Resource-globals doc → open the Resource editor (globals table) rather than
+  // the synthesised (non-editable) CONFIGURATION declaration.
+  if (target.uri === RESOURCE_GLOBALS_URI) {
+    return openResourceEditor()
+  }
+
+  // SoftMotion axis globals doc → open the owning drive's config screen rather
+  // than the synthesised (non-editable) global declaration.
+  if (target.uri === SOFTMOTION_GLOBALS_URI) {
+    return redirectSoftMotionAxis(target.lineLsp)
+  }
 
   // Datatypes URI → open the matching data-type editor tab.  The LSP
   // emits this URI for every reference into the synthesised
@@ -112,10 +234,15 @@ export function redirectDefinitionToStore(loc: Location | LocationLink): boolean
   // branch the redirect would dead-end silently.
   if (target.uri === DATA_TYPES_URI) {
     const dataTypes = openPLCStoreBase.getState().project.data.dataTypes
-    const dt = findDataTypeAtLine(target.lineLsp, dataTypes)
-    if (!dt) return false
-    openDataTypeEditor(dt)
-    return true
+    const hit = findDataTypeAtLine(target.lineLsp, dataTypes)
+    if (!hit) return false
+    // Entry-relative line → `.dt` view line (its own `TYPE` frame sits
+    // above the entry) → Monaco's 1-indexed frame.
+    return routeToDataTypeCodeView(
+      hit.dataType,
+      hit.lineInEntry + DT_VIEW_FRAME_LINE_COUNT + 1,
+      target.characterLsp + 1,
+    )
   }
 
   const parsed = parsePouUri(target.uri)

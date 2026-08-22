@@ -16,9 +16,10 @@ import type {
   PLCVariable,
 } from '../../middleware/shared/ports/types'
 import type { DebugMap, DebugVariableEntry } from './debug-parser'
-import { buildLeafPathMap, packDebugAddr } from './debug-parser'
+import { packDebugAddr } from './debug-parser'
 import { buildDebugTree } from './debug-tree-builder'
 import { buildDebugPathPrefix, findInstanceName, type PLCInstanceMapping } from './debug-variable-finder'
+import { collapseCarriageReturns } from './terminal-output'
 
 // ---------------------------------------------------------------------------
 // 0. logCompilerEvent — shared log helper for compile/debug progress
@@ -29,7 +30,15 @@ import { buildDebugPathPrefix, findInstanceName, type PLCInstanceMapping } from 
  *
  * Plain progress messages get split on newlines into one log entry
  * per line — keeps the existing scroll/wrap/copy behaviour intact for
- * the long Arduino-CLI / xml2st outputs.
+ * the long Arduino-CLI / compiler outputs.
+ *
+ * Carriage returns are honoured the way a terminal does. arduino-cli draws
+ * download progress by rewriting one line with `\r`, so each chunk is
+ * collapsed to the frame that would actually be on screen, and the entry is
+ * marked `transient` while the line is still open (no terminating newline).
+ * The console then overwrites that line on the next redraw rather than
+ * appending, which is what keeps a 200 MB core install to a single live line
+ * instead of several hundred stacked ones.
  *
  * Events that carry a structured `compileError` are emitted as a
  * single multi-line entry instead, with the structured field attached.
@@ -44,12 +53,16 @@ export function logCompilerEvent(
     level?: string
     compileError?: import('../../middleware/shared/ports/types').StructuredCompileError
   },
-  log: (entry: {
-    id: string
-    level: 'error' | 'debug' | 'info' | 'warning'
-    message: string
-    compileError?: import('../../middleware/shared/ports/types').StructuredCompileError
-  }) => void,
+  log: (
+    entry: {
+      id: string
+      level: 'error' | 'debug' | 'info' | 'warning'
+      message: string
+      compileError?: import('../../middleware/shared/ports/types').StructuredCompileError
+      transient?: boolean
+    },
+    options?: { redraw?: boolean },
+  ) => void,
 ): void {
   if (!event.message) return
   const level = (event.level as 'error' | 'debug' | 'info' | 'warning') ?? 'info'
@@ -64,103 +77,88 @@ export function logCompilerEvent(
     return
   }
 
-  event.message
-    .trim()
-    .split('\n')
-    .forEach((line) => {
-      if (line) {
-        log({
-          id: crypto.randomUUID(),
-          level,
-          message: line,
-        })
-      }
-    })
+  // Whether the chunk ended mid-line decides if its final entry stays open for
+  // the next redraw, so read that before trimming anything away.
+  const endsWithNewline = event.message.endsWith('\n')
+
+  // Trim the block edges as before, but leave carriage returns alone: `\r` is
+  // a redraw marker here, not padding, and `String.trim` would eat it.
+  const lines = event.message.replace(/^[ \t\n]+|[ \t\n]+$/g, '').split('\n')
+
+  lines.forEach((rawLine, index) => {
+    // A `\r` at the END of a line is the CR half of a CRLF terminator, not a
+    // redraw — every line of Windows output carries one, and a chunk can also
+    // break between the `\r` and the `\n`. arduino-cli always writes a progress
+    // CR at the START of a frame, so position is what separates the two.
+    //
+    // Getting this wrong loses log lines rather than merely misformatting
+    // them: an ordinary Windows line counted as a redraw overwrites the live
+    // progress line above it, and one left open is itself overwritten by the
+    // next redraw.
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+
+    const redraw = line.includes('\r')
+    const message = collapseCarriageReturns(line)
+    if (!message.trim()) return
+
+    const isFinalLine = index === lines.length - 1
+    log(
+      {
+        id: crypto.randomUUID(),
+        level,
+        message,
+        // Only a redraw leaves an open line. A plain partial line is left
+        // permanent: appending to it would need real cursor tracking, and
+        // build output never relies on that.
+        transient: redraw && isFinalLine && !endsWithNewline,
+      },
+      { redraw },
+    )
+  })
 }
 
 // ---------------------------------------------------------------------------
-// 1. buildVariableIndexMap — composite-key -> packed-DebugAddr
+// 1. deriveVariableIndexMap — composite-key -> packed-DebugAddr (from the tree)
 // ---------------------------------------------------------------------------
-
-export interface VariableIndexMapResult {
-  indexMap: Map<string, number>
-  warnings: string[]
-}
 
 /**
- * Build a composite-key -> packed-DebugAddr map from a DebugMap.
+ * Derive the composite-key -> packed-DebugAddr map from the debug tree, which
+ * is the single enumeration walk (`traverseVariable`, via
+ * `buildDebugVariableTreeMap`).
  *
- * The map addresses variables as (arrayIdx, elemIdx) pairs; we pack those
- * into a single number `(arr << 16) | elem` so downstream store types and
- * the polling loop see a plain `number` key.
+ * The tree already resolved every variable's debug address exactly once,
+ * applying the one path convention (external globals by their bare name,
+ * program-locals instance-prefixed, `.FIELD` for struct/FB fields, `[idx]` for
+ * array elements). Flattening its leaves here guarantees the LD/FBD editors,
+ * the watch panel, and the poller all address a variable identically — there is
+ * no second walk that can drift. (A divergent inline walk here is exactly how
+ * force silently no-op'd on located globals: it missed the external case.)
  *
- * Path convention emitted by STruC++:
- *   INSTANCE_NAME.VAR_NAME            (scalar)
- *   INSTANCE_NAME.VAR_NAME[5]         (array element, IEC-indexed)
- *   INSTANCE_NAME.FB_INST.FIELD       (nested struct/FB field)
+ * Addresses are (arrayIdx, elemIdx) pairs packed into a single number
+ * `(arr << 16) | elem`. `treeMap` is the flat compositeKey -> node map that
+ * `buildDebugVariableTreeMap` returns (every node, nested included).
  */
-export function buildVariableIndexMap(pous: PLCPou[], instances: PLCInstance[], map: DebugMap): VariableIndexMapResult {
+export function deriveVariableIndexMap(treeMap: Map<string, DebugTreeNode>, map: DebugMap): Map<string, number> {
   const indexMap = new Map<string, number>()
-  const warnings: string[] = []
 
-  // Single source of truth for path → packed-address (case-insensitive).
-  // Same lookup the OPC-UA resolver uses.
-  const pathToAddr = buildLeafPathMap(map)
-
-  const instanceMappings: PLCInstanceMapping[] = instances.map((inst) => ({
-    name: inst.name,
-    program: inst.program,
-  }))
-
-  pous.forEach((pou) => {
-    if (pou.pouType !== 'program') return
-
-    const instanceName = findInstanceName(pou.name, instanceMappings)
-    if (!instanceName) {
-      warnings.push(`No instance found for program '${pou.name}', skipping debug variable parsing.`)
-      return
+  // Every resolved leaf in the tree, keyed by its composite key. Complex nodes
+  // (structs / FBs / arrays) carry no address of their own — only their leaves
+  // do (debugIndex === undefined on the parents).
+  for (const [compositeKey, node] of treeMap) {
+    if (node.debugIndex !== undefined) {
+      indexMap.set(compositeKey, node.debugIndex)
     }
+  }
 
-    const upperInstance = instanceName.toUpperCase()
-    const variables = pou.interface?.variables ?? []
-
-    variables.forEach((v: PLCVariable) => {
-      if (v.type.definition === 'array' && v.type.data) {
-        const dimensions = v.type.data.dimensions
-        if (dimensions.length > 0) {
-          const dimMatch = dimensions[0].dimension.match(/^(-?\d+)\.\.(-?\d+)$/)
-          if (dimMatch) {
-            const startIdx = parseInt(dimMatch[1], 10)
-            const endIdx = parseInt(dimMatch[2], 10)
-            for (let i = 0; i <= endIdx - startIdx; i++) {
-              const iecIdx = startIdx + i
-              const path = `${upperInstance}.${v.name.toUpperCase()}[${iecIdx}]`
-              const addr = pathToAddr.get(path)
-              if (addr !== undefined) {
-                indexMap.set(`${pou.name}:${v.name}[${iecIdx}]`, addr)
-              }
-            }
-          }
-        }
-      } else {
-        const path = `${upperInstance}.${v.name.toUpperCase()}`
-        const addr = pathToAddr.get(path)
-        if (addr !== undefined) {
-          indexMap.set(`${pou.name}:${v.name}`, addr)
-        }
-      }
-    })
-  })
-
-  // Fallback: also key by the raw debug path so any leaves we didn't cover
-  // (nested fields, FB internals) remain reachable by path.
+  // Fallback: also key by the raw debug path so any leaves the tree didn't
+  // surface (e.g. library-FB internals) remain reachable by path.
   for (const leaf of map.leaves) {
     if (!indexMap.has(leaf.path)) {
       indexMap.set(leaf.path, packDebugAddr(leaf))
     }
   }
 
-  return { indexMap, warnings }
+  return indexMap
 }
 
 /**
@@ -183,12 +181,16 @@ export interface DebugVariableTreeMapResult {
   treeMap: Map<string, DebugTreeNode>
   trees: DebugTreeNode[]
   complexCount: number
+  warnings: string[]
 }
 
 /**
  * Build a flat compositeKey -> DebugTreeNode map by traversing all program
- * POU variables. Pure function — swallows per-variable errors to match
- * existing behaviour.
+ * POU variables. This is the single enumeration walk (`traverseVariable`);
+ * `deriveVariableIndexMap` and the poller's leaf collection both project off
+ * its output rather than re-walking. Pure function — swallows per-variable
+ * errors to match existing behaviour; `warnings` collects programs with no
+ * instance in Resources (same diagnostic the old index-map walk emitted).
  */
 export function buildDebugVariableTreeMap(
   pous: PLCPou[],
@@ -199,6 +201,7 @@ export function buildDebugVariableTreeMap(
 ): DebugVariableTreeMapResult {
   const trees: DebugTreeNode[] = []
   const treeMap = new Map<string, DebugTreeNode>()
+  const warnings: string[] = []
   let complexCount = 0
 
   const instanceMappings: PLCInstanceMapping[] = instances.map((inst) => ({
@@ -219,7 +222,10 @@ export function buildDebugVariableTreeMap(
     if (pou.pouType !== 'program') return
 
     const instanceName = findInstanceName(pou.name, instanceMappings)
-    if (!instanceName) return
+    if (!instanceName) {
+      warnings.push(`No instance found for program '${pou.name}', skipping debug variable parsing.`)
+      return
+    }
 
     const variables = pou.interface?.variables ?? []
     variables.forEach((v: PLCVariable) => {
@@ -262,7 +268,7 @@ export function buildDebugVariableTreeMap(
     }
   })
 
-  return { treeMap, trees, complexCount }
+  return { treeMap, trees, complexCount, warnings }
 }
 
 // ---------------------------------------------------------------------------

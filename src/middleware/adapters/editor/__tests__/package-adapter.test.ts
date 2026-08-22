@@ -50,6 +50,7 @@ beforeEach(() => {
     getPackageManifest: jest.fn().mockResolvedValue(validManifest),
     onOpenPackageManager: jest.fn().mockImplementation(() => jest.fn()),
     onBoardsUpdated: jest.fn().mockImplementation(() => jest.fn()),
+    verifyInstalledPackageSignatures: jest.fn().mockResolvedValue([]),
   } as unknown as typeof window.bridge
 
   global.fetch = jest.fn() as unknown as typeof fetch
@@ -123,6 +124,24 @@ describe('createEditorPackageAdapter', () => {
     it('returns null when the bridge returns undefined', async () => {
       ;(window.bridge.getPackageManifest as jest.Mock).mockResolvedValue(undefined)
       expect(await adapter.getManifest('missing')).toBeNull()
+    })
+
+    it('keeps the manifest usable when its stored compatibility floor is unreadable', async () => {
+      // Read path, not the install boundary (DOPE-448): a package installed
+      // before the floor format was checked must still render and still
+      // provide its boards. The floor is dropped with a log, not the manifest.
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {})
+      ;(window.bridge.getPackageManifest as jest.Mock).mockResolvedValue({
+        ...validManifest,
+        package: { ...validManifest.package, minEditorVersion: 'nightly' },
+      })
+
+      const result = await adapter.getManifest('acme-controller')
+
+      expect(result?.package.id).toBe('acme-controller')
+      expect(result?.package).not.toHaveProperty('minEditorVersion')
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('minEditorVersion'))
+      warnSpy.mockRestore()
     })
 
     it('returns null when the bridge returns a malformed manifest (zod rejection)', async () => {
@@ -207,6 +226,19 @@ describe('createEditorPackageAdapter', () => {
       const off = adapter.onBoardsUpdated(cb)
       expect(window.bridge.onBoardsUpdated).toHaveBeenCalledWith(cb)
       expect(off).toBe(unsubscribe)
+    })
+  })
+
+  describe('verifyInstalledSignatures', () => {
+    it('delegates to the bridge and returns the removed package ids', async () => {
+      ;(window.bridge.verifyInstalledPackageSignatures as jest.Mock).mockResolvedValue(['com.synergy-logic.slm-rp4'])
+      const removed = await adapter.verifyInstalledSignatures()
+      expect(window.bridge.verifyInstalledPackageSignatures).toHaveBeenCalledTimes(1)
+      expect(removed).toEqual(['com.synergy-logic.slm-rp4'])
+    })
+
+    it('returns an empty array when nothing was removed', async () => {
+      expect(await adapter.verifyInstalledSignatures()).toEqual([])
     })
   })
 })

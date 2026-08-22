@@ -17,6 +17,7 @@ import { parseHybridPouFromString, parseTextualPouFromString } from '../../../..
 import { Modal, ModalContent, ModalTitle } from '../../../../_molecules/modal'
 import { toast } from '../../../[app]/toast/use-toast'
 import { renderDiffReview } from './ai-diff-review'
+import { type AiLspCoexistenceController, installAiLspCoexistenceKeybindings } from './ai-lsp-coexistence'
 import {
   arduinoApiCompletion,
   cppSignatureHelp,
@@ -127,6 +128,7 @@ const MonacoEditor = (props: monacoEditorProps): ReturnType<typeof PrimitiveEdit
   const editorRef = useRef<null | monaco.editor.IStandaloneCodeEditor>(null)
   const monacoRef = useRef<null | typeof monaco>(null)
   const focusDisposables = useRef<{ onFocus?: monaco.IDisposable; onBlur?: monaco.IDisposable }>({})
+  const coexistenceRef = useRef<AiLspCoexistenceController | null>(null)
   const [editorMounted, setEditorMounted] = useState(false)
   const [modelVersion, setModelVersion] = useState(0)
   const isSyncingModelRef = useRef(false)
@@ -986,6 +988,12 @@ const MonacoEditor = (props: monacoEditorProps): ReturnType<typeof PrimitiveEdit
       )
     }
 
+    // Tab/Enter split so AI ghost text and the LSP dropdown can coexist. The
+    // overrides are gated on a context key we drive from `inlineCompletionsActive`
+    // (see the effect below), so they're inert while AI is off.
+    coexistenceRef.current = installAiLspCoexistenceKeybindings(editorInstance, monacoInstance)
+    coexistenceRef.current.setActive(inlineCompletionsActive)
+
     // Manual trigger suggest
     const handleKeyUp = (e: KeyboardEvent) => {
       const isMac = navigator.platform.toUpperCase().includes('MAC')
@@ -1220,13 +1228,13 @@ void loop()
   // Editor options
   // -----------------------------------------------------------------------
 
-  // Inline AI completions take over the suggest widget only while they are
-  // actually active (same gate as the provider registration above). When the
-  // user turns inline completions off, fall back to Monaco's normal quick
-  // suggestions (the auto-dropdown). Ctrl+Space still triggers the suggest
-  // widget manually in both modes — `quickSuggestions` only governs the
-  // automatic popup, and `suppressSuggestions` only suppresses the auto popup
-  // while an inline suggestion is showing.
+  // AI inline completions and the STruC++ LSP suggest widget COEXIST: the
+  // LSP dropdown still auto-opens (fast, deterministic, great for variables and
+  // struct members) while the AI ghost text renders alongside it. Acceptance is
+  // split by key — Enter/arrows accept the LSP dropdown, Tab commits the AI
+  // suggestion (see `installAiLspCoexistenceKeybindings`). `suppressSuggestions`
+  // is therefore false so the dropdown is NOT hidden while ghost text shows.
+  // Ctrl+Space still triggers the suggest widget manually in both modes.
   const inlineCompletionsActive =
     capabilities.hasAIAssistant &&
     aiState.isEnabled &&
@@ -1237,6 +1245,17 @@ void loop()
     minimap: { enabled: false },
     dropIntoEditor: { enabled: true },
     readOnly: isDebuggerVisible,
+    // Force Monaco's classic hidden-<textarea> input instead of the newer
+    // EditContext-API surface (a plain `<div class="native-edit-context">`).
+    // Monaco 0.54 enables EditContext by default wherever the browser exposes
+    // the API, but WebKit/Safari's EditContext support is immature: the Tab
+    // `keydown` on that surface never reaches Monaco's keybinding service, so
+    // Tab-accept of AI inline suggestions silently no-ops on Safari (mouse
+    // "Accept" works because it's a direct widget action). The textarea path is
+    // mature and consistent across Chrome/Safari, restoring Tab-accept. (It also
+    // makes the surface a real input element that @xyflow's `isInputDOMNode`
+    // recognises — see the `.nokey` workaround note in the render below.)
+    editContext: false,
     // Lock indentation to 4 spaces across every language Monaco
     // hosts (ST / IL / Python / C++).  Without this Monaco's
     // `detectIndentation` heuristic kicks in on the existing model
@@ -1249,7 +1268,9 @@ void loop()
     tabSize: 4,
     insertSpaces: true,
     detectIndentation: false,
-    quickSuggestions: inlineCompletionsActive ? false : undefined,
+    // Let the LSP dropdown auto-open in both modes — even with AI on, we want
+    // the fast LSP completions visible (the user accepts them with Enter/arrows).
+    quickSuggestions: undefined,
     // Pinned for cross-platform consistency with the variables-code-editor.
     // Monaco's default is platform-dependent (12 on macOS, 14 elsewhere) —
     // without this both surfaces would mismatch on Linux/Windows even
@@ -1274,10 +1295,70 @@ void loop()
     ...(inlineCompletionsActive && {
       inlineSuggest: {
         enabled: true,
-        suppressSuggestions: true,
-      },
+        // Keep the LSP dropdown visible alongside the AI ghost text instead of
+        // suppressing it — coexistence is the whole point here.
+        suppressSuggestions: false,
+        // Render the AI ghost text EVEN WHILE the LSP suggest widget is open
+        // with a highlighted item. Monaco defaults `showOnSuggestConflict` to
+        // 'never', which hides the ghost the instant the dropdown auto-selects
+        // an entry (which it does on almost every keystroke) — so the ghost
+        // that Tab is meant to accept would flicker away exactly when the user
+        // reaches for it. 'always' keeps both surfaces visible; acceptance stays
+        // split by key (Enter/arrows commit the LSP item, Tab commits the AI
+        // ghost — see `installAiLspCoexistenceKeybindings`). `experimental` is
+        // not yet in Monaco's public `IInlineSuggestOptions` type but is read at
+        // runtime (editorOptions.js), hence the cast.
+        experimental: { showOnSuggestConflict: 'always' },
+      } as monacoEditorOptionsType['inlineSuggest'],
     }),
   }
+
+  // Keep the coexistence Tab overrides in sync with AI state so toggling AI on/off
+  // takes effect without remounting the editor. `editorInstanceId` re-asserts it
+  // after a remount (the mount handler also sets it, this is belt-and-braces).
+  useEffect(() => {
+    coexistenceRef.current?.setActive(inlineCompletionsActive)
+  }, [inlineCompletionsActive, editorInstanceId])
+
+  // AI inline-completion idle re-trigger.
+  //
+  // Monaco only auto-triggers inline completions on a content change and renders
+  // just the latest call's result, so a request can complete without ever
+  // painting (a late/superseded result is silently dropped) — after which
+  // nothing re-requests until the next keystroke, and the suggestion appears to
+  // "give up". This re-arms it: once the user has been idle for 2s with AI on and
+  // no ghost text currently visible, we explicitly re-trigger inline suggest so
+  // the editor always eventually offers something for a settled cursor. The 2s
+  // window keeps this from firing needless requests during active editing; it
+  // fires at most once per idle period (triggering does not change content, so
+  // the timer is not re-armed by its own action).
+  useEffect(() => {
+    if (!inlineCompletionsActive) return
+    const editor = editorRef.current
+    if (!editor) return
+
+    const IDLE_MS = 2000
+    let idleTimer: ReturnType<typeof setTimeout> | undefined
+
+    const scheduleIdleRetrigger = () => {
+      if (idleTimer) clearTimeout(idleTimer)
+      idleTimer = setTimeout(() => {
+        if (!editor.hasTextFocus()) return
+        const model = editor.getModel()
+        if (!model || model.getValueLength() === 0) return
+        // Skip if a ghost is already showing (avoid a redundant request).
+        const dom = editor.getDomNode()
+        if (dom?.querySelector('.ghost-text-decoration, .ghost-text, [class*="ghost-text"]')) return
+        editor.trigger('openplc-ai-idle', 'editor.action.inlineSuggest.trigger', {})
+      }, IDLE_MS)
+    }
+
+    const changeDisposable = editor.onDidChangeModelContent(scheduleIdleRetrigger)
+    return () => {
+      if (idleTimer) clearTimeout(idleTimer)
+      changeDisposable.dispose()
+    }
+  }, [inlineCompletionsActive, editorInstanceId])
 
   // -----------------------------------------------------------------------
   // Drag-and-drop
