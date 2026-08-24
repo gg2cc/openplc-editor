@@ -46,6 +46,15 @@ const TRIGGER_OPTIONS = [
   { value: 'on_change', label: 'On Change (变化发送)' },
 ]
 
+const CAN_SELECT_TRIGGER_STYLES =
+  'flex h-[30px] w-full items-center justify-between gap-1 rounded-md border border-neutral-300 bg-white px-2 py-1 font-caption !text-xs font-medium text-neutral-850 outline-none data-[state=open]:border-brand-medium-dark dark:border-neutral-850 dark:bg-neutral-950 dark:text-neutral-300'
+
+const CAN_SELECT_CONTENT_STYLES =
+  'h-fit max-h-[200px] w-[--radix-select-trigger-width] overflow-y-auto rounded-lg border border-neutral-300 bg-white outline-none drop-shadow-lg dark:border-brand-medium-dark dark:bg-neutral-950'
+
+const CAN_SELECT_ITEM_STYLES =
+  'data-[state=checked]:[&:not(:hover)]:bg-neutral-100 data-[state=checked]:dark:[&:not(:hover)]:bg-neutral-900 flex w-full cursor-pointer items-center justify-start px-2 py-1 outline-none hover:bg-neutral-100 dark:hover:bg-neutral-800'
+
 const DEFAULT_HARDWARE_CONFIG: CanHardwareConfig = {
   interface: 'can0',
   bitrate: 500000,
@@ -355,11 +364,13 @@ const TxFrameModal = ({ isOpen, onClose, frame, onSave }: TxFrameModalProps) => 
             <div className='flex items-center gap-2'>
               <Label className='w-20 text-xs text-neutral-950 dark:text-white'>Trigger</Label>
               <Select value={trigger} onValueChange={(val) => setTrigger(val as 'cyclic' | 'on_change')}>
-                <SelectTrigger className='h-[30px] text-xs px-2' />
-                <SelectContent className='bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800'>
+                <SelectTrigger withIndicator placeholder='Select trigger' className={CAN_SELECT_TRIGGER_STYLES} />
+                <SelectContent className={CAN_SELECT_CONTENT_STYLES}>
                   {TRIGGER_OPTIONS.map((t) => (
-                    <SelectItem key={t.value} value={t.value} className='text-xs py-1 px-2 cursor-pointer'>
-                      {t.label}
+                    <SelectItem key={t.value} value={t.value} className={CAN_SELECT_ITEM_STYLES}>
+                      <span className='text-start font-caption text-xs font-normal text-neutral-700 dark:text-neutral-100'>
+                        {t.label}
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -568,15 +579,6 @@ const CanDeviceEditor = () => {
   const inputStyles =
     'h-[30px] w-full rounded-md border border-neutral-300 bg-white px-2 py-1 font-caption text-cp-sm font-medium text-neutral-850 outline-none focus:border-brand-medium-dark dark:border-neutral-850 dark:bg-neutral-950 dark:text-neutral-300'
 
-  const selectTriggerStyles =
-    'flex h-[30px] w-full items-center justify-between gap-1 rounded-md border border-neutral-300 bg-white px-2 py-1 font-caption !text-xs font-medium text-neutral-850 outline-none data-[state=open]:border-brand-medium-dark dark:border-neutral-850 dark:bg-neutral-950 dark:text-neutral-300'
-
-  const selectContentStyles =
-    'h-fit max-h-[200px] w-[--radix-select-trigger-width] overflow-y-auto rounded-lg border border-neutral-300 bg-white outline-none drop-shadow-lg dark:border-brand-medium-dark dark:bg-neutral-950'
-
-  const selectItemStyles =
-    'data-[state=checked]:[&:not(:hover)]:bg-neutral-100 data-[state=checked]:dark:[&:not(:hover)]:bg-neutral-900 flex w-full cursor-pointer items-center justify-start px-2 py-1 outline-none hover:bg-neutral-100 dark:hover:bg-neutral-800'
-
   return (
     <div className='flex h-full w-full flex-col overflow-y-auto bg-neutral-100 p-6 dark:bg-neutral-900'>
       {/* Header */}
@@ -611,10 +613,10 @@ const CanDeviceEditor = () => {
                 value={hw.bitrate.toString()}
                 onValueChange={(val) => handleHwChange('bitrate', parseInt(val, 10) || 500000)}
               >
-                <SelectTrigger withIndicator placeholder='Select bitrate' className={selectTriggerStyles} />
-                <SelectContent className={selectContentStyles}>
+                <SelectTrigger withIndicator placeholder='Select bitrate' className={CAN_SELECT_TRIGGER_STYLES} />
+                <SelectContent className={CAN_SELECT_CONTENT_STYLES}>
                   {BITRATE_OPTIONS.map((b) => (
-                    <SelectItem key={b.value} value={b.value} className={selectItemStyles}>
+                    <SelectItem key={b.value} value={b.value} className={CAN_SELECT_ITEM_STYLES}>
                       <span className='text-start font-caption text-xs font-normal text-neutral-700 dark:text-neutral-100'>
                         {b.label}
                       </span>

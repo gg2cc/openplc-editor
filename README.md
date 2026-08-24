@@ -55,6 +55,10 @@ The project uses GitHub Actions to automatically build and release new versions 
 To create a new release, simply create and push a new tag with the version number:
 
 ```bash
+#(可选: 删除远程和本地 tag)
+git push origin --delete v4.2.11.1
+git tag -d v4.2.11.1
+
 git tag v4.2.0
 git push origin v4.2.0
 ```
