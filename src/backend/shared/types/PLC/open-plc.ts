@@ -766,19 +766,16 @@ const CanHardwareConfigSchema = z.object({
   sjw: z.number().optional(),
   samplePoint: z.number().optional(),
   restartMs: z.number().optional(),
-  listenOnly: z.boolean().optional(),
-  loopback: z.boolean().optional(),
   tripleSampling: z.boolean().optional(),
-  autoBringup: z.boolean().optional(),
 })
-type CanHardwareConfig = z.infer<typeof CanHardwareConfigSchema>
+export type CanHardwareConfig = z.infer<typeof CanHardwareConfigSchema>
 
 const CanMappingSchema = z.object({
   byteOffset: z.number(),
   iecType: z.string(),
   iecIndex: z.number(),
 })
-type CanMapping = z.infer<typeof CanMappingSchema>
+export type CanMapping = z.infer<typeof CanMappingSchema>
 
 const CanRxFrameSchema = z.object({
   canId: z.string(),
@@ -787,7 +784,7 @@ const CanRxFrameSchema = z.object({
   dlc: z.number().optional(),
   mappings: z.array(CanMappingSchema).optional(),
 })
-type CanRxFrame = z.infer<typeof CanRxFrameSchema>
+export type CanRxFrame = z.infer<typeof CanRxFrameSchema>
 
 const CanTxFrameSchema = z.object({
   canId: z.string(),
@@ -798,14 +795,14 @@ const CanTxFrameSchema = z.object({
   cycleTimeMs: z.number().optional(),
   mappings: z.array(CanMappingSchema).optional(),
 })
-type CanTxFrame = z.infer<typeof CanTxFrameSchema>
+export type CanTxFrame = z.infer<typeof CanTxFrameSchema>
 
 const CanConfigSchema = z.object({
   hardwareConfig: CanHardwareConfigSchema.optional(),
   rxFrames: z.array(CanRxFrameSchema).optional(),
   txFrames: z.array(CanTxFrameSchema).optional(),
 })
-type CanConfig = z.infer<typeof CanConfigSchema>
+export type CanConfig = z.infer<typeof CanConfigSchema>
 
 const PLCRemoteDeviceSchema = z.object({
   name: z.string(),

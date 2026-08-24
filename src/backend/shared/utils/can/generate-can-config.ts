@@ -20,10 +20,7 @@ export function generateCanConfig(remoteDevices: PLCRemoteDevice[] | undefined):
       sjw: hardwareConfig?.sjw ?? 1,
       sample_point: hardwareConfig?.samplePoint ?? 0.875,
       restart_ms: hardwareConfig?.restartMs ?? 100,
-      listen_only: hardwareConfig?.listenOnly ?? false,
-      loopback: hardwareConfig?.loopback ?? false,
       triple_sampling: hardwareConfig?.tripleSampling ?? false,
-      auto_bringup: hardwareConfig?.autoBringup ?? true,
     },
     rx_frames: rxFrames.map((frame) => ({
       can_id: frame.canId || '0x0',

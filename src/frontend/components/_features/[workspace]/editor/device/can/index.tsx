@@ -52,10 +52,7 @@ const DEFAULT_HARDWARE_CONFIG: CanHardwareConfig = {
   sjw: 1,
   samplePoint: 0.875,
   restartMs: 100,
-  listenOnly: false,
-  loopback: false,
   tripleSampling: false,
-  autoBringup: true,
 }
 
 // Modal for editing an RX Frame
@@ -571,6 +568,15 @@ const CanDeviceEditor = () => {
   const inputStyles =
     'h-[30px] w-full rounded-md border border-neutral-300 bg-white px-2 py-1 font-caption text-cp-sm font-medium text-neutral-850 outline-none focus:border-brand-medium-dark dark:border-neutral-850 dark:bg-neutral-950 dark:text-neutral-300'
 
+  const selectTriggerStyles =
+    'flex h-[30px] w-full items-center justify-between gap-1 rounded-md border border-neutral-300 bg-white px-2 py-1 font-caption !text-xs font-medium text-neutral-850 outline-none data-[state=open]:border-brand-medium-dark dark:border-neutral-850 dark:bg-neutral-950 dark:text-neutral-300'
+
+  const selectContentStyles =
+    'h-fit max-h-[200px] w-[--radix-select-trigger-width] overflow-y-auto rounded-lg border border-neutral-300 bg-white outline-none drop-shadow-lg dark:border-brand-medium-dark dark:bg-neutral-950'
+
+  const selectItemStyles =
+    'data-[state=checked]:[&:not(:hover)]:bg-neutral-100 data-[state=checked]:dark:[&:not(:hover)]:bg-neutral-900 flex w-full cursor-pointer items-center justify-start px-2 py-1 outline-none hover:bg-neutral-100 dark:hover:bg-neutral-800'
+
   return (
     <div className='flex h-full w-full flex-col overflow-y-auto bg-neutral-100 p-6 dark:bg-neutral-900'>
       {/* Header */}
@@ -605,11 +611,13 @@ const CanDeviceEditor = () => {
                 value={hw.bitrate.toString()}
                 onValueChange={(val) => handleHwChange('bitrate', parseInt(val, 10) || 500000)}
               >
-                <SelectTrigger className='h-[30px] text-xs px-2' />
-                <SelectContent className='bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800'>
+                <SelectTrigger withIndicator placeholder='Select bitrate' className={selectTriggerStyles} />
+                <SelectContent className={selectContentStyles}>
                   {BITRATE_OPTIONS.map((b) => (
-                    <SelectItem key={b.value} value={b.value} className='text-xs py-1 px-2 cursor-pointer'>
-                      {b.label}
+                    <SelectItem key={b.value} value={b.value} className={selectItemStyles}>
+                      <span className='text-start font-caption text-xs font-normal text-neutral-700 dark:text-neutral-100'>
+                        {b.label}
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -617,7 +625,7 @@ const CanDeviceEditor = () => {
             </div>
 
             <div className='flex flex-col gap-1.5'>
-              <Label className='text-xs text-neutral-700 dark:text-neutral-300'>SJW (再同步跳跃宽度)</Label>
+              <Label className='text-xs text-neutral-700 dark:text-neutral-300'>SJW (再同步跳转宽度)</Label>
               <InputWithRef
                 type='number'
                 min={1}
@@ -650,41 +658,6 @@ const CanDeviceEditor = () => {
                 onChange={(e) => handleHwChange('restartMs', parseInt(e.target.value, 10) || 0)}
                 className={inputStyles}
               />
-            </div>
-          </div>
-
-          <div className='grid grid-cols-4 gap-4 pt-2 border-t border-neutral-100 dark:border-neutral-850'>
-            <div className='flex items-center gap-2'>
-              <ToggleSwitch
-                id='auto-bringup'
-                checked={hw.autoBringup ?? true}
-                onCheckedChange={(checked) => handleHwChange('autoBringup', checked)}
-              />
-              <Label htmlFor='auto-bringup' className='text-xs text-neutral-700 dark:text-neutral-300 cursor-pointer'>
-                Auto Bringup
-              </Label>
-            </div>
-
-            <div className='flex items-center gap-2'>
-              <ToggleSwitch
-                id='listen-only'
-                checked={hw.listenOnly ?? false}
-                onCheckedChange={(checked) => handleHwChange('listenOnly', checked)}
-              />
-              <Label htmlFor='listen-only' className='text-xs text-neutral-700 dark:text-neutral-300 cursor-pointer'>
-                Listen Only
-              </Label>
-            </div>
-
-            <div className='flex items-center gap-2'>
-              <ToggleSwitch
-                id='loopback'
-                checked={hw.loopback ?? false}
-                onCheckedChange={(checked) => handleHwChange('loopback', checked)}
-              />
-              <Label htmlFor='loopback' className='text-xs text-neutral-700 dark:text-neutral-300 cursor-pointer'>
-                Loopback
-              </Label>
             </div>
 
             <div className='flex items-center gap-2'>

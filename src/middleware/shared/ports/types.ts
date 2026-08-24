@@ -417,10 +417,7 @@ export interface CanHardwareConfig {
   sjw?: number
   samplePoint?: number
   restartMs?: number
-  listenOnly?: boolean
-  loopback?: boolean
   tripleSampling?: boolean
-  autoBringup?: boolean
 }
 
 export interface CanMapping {
