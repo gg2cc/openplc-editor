@@ -42,6 +42,7 @@ import { generateS7CommConfig } from '../../../../frontend/utils/s7comm'
 import { generateEthercatConfig } from '../../ethercat/generate-ethercat-config'
 import { validateEthercatConfig } from '../../ethercat/validate-ethercat-config'
 import type { PLCRemoteDevice, PLCServer } from '../../types/PLC/open-plc'
+import { generateCanConfig } from '../../utils/can/generate-can-config'
 import { generateModbusMasterConfig } from '../../utils/modbus/generate-modbus-master-config'
 
 /**
@@ -92,6 +93,7 @@ export interface GenerateConfsOutput {
    *  return guarantees either `null` (no devices) or a string that
    *  passed validation. */
   ethercat: string | null
+  can: string | null
 }
 
 /**
@@ -152,5 +154,7 @@ export function generateRuntimeConfs(input: GenerateConfsInput): GenerateConfsOu
     throw new Error(`EtherCAT configuration is invalid: ${ethercatErrors.join('; ')}`)
   }
 
-  return { modbusSlave, modbusMaster, s7Comm, opcUa, ethercat }
+  const can = generateCanConfig(remoteDevices)
+
+  return { modbusSlave, modbusMaster, s7Comm, opcUa, ethercat, can }
 }

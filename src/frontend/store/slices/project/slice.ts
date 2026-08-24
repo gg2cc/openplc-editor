@@ -1646,6 +1646,23 @@ const createProjectSlice: StateCreator<ProjectSliceRoot, [], [], ProjectSlice> =
           if (device.protocol === 'modbus-tcp' && !device.modbusTcpConfig) {
             device.modbusTcpConfig = { host: '127.0.0.1', port: 502, slaveId: 1, timeout: 1000, ioGroups: [] }
           }
+          if (device.protocol === 'can' && !device.canConfig) {
+            device.canConfig = {
+              hardwareConfig: {
+                interface: 'can0',
+                bitrate: 500000,
+                sjw: 1,
+                samplePoint: 0.875,
+                restartMs: 100,
+                listenOnly: false,
+                loopback: false,
+                tripleSampling: false,
+                autoBringup: true,
+              },
+              rxFrames: [],
+              txFrames: [],
+            }
+          }
           slice.project.data.remoteDevices.push(device)
 
           // EtherCAT bus is driven by a dedicated thread inside the
@@ -2007,6 +2024,28 @@ const createProjectSlice: StateCreator<ProjectSliceRoot, [], [], ProjectSlice> =
         // addresses are packed alongside VPP/Modbus.
         getState().projectActions.recalculateIecAddresses()
       }
+      return response
+    },
+    updateCanConfig: (deviceName, canConfig) => {
+      let response = ok()
+      setState(
+        produce((slice: ProjectSlice) => {
+          if (!slice.project.data.remoteDevices) {
+            response = { ok: false, message: 'No remote devices found' }
+            return
+          }
+          const device = slice.project.data.remoteDevices.find((d) => d.name === deviceName)
+          if (!device) {
+            response = { ok: false, message: 'Remote device not found' }
+            return
+          }
+          if (device.protocol !== 'can') {
+            response = { ok: false, message: 'Device is not a CAN device' }
+            return
+          }
+          device.canConfig = canConfig
+        }),
+      )
       return response
     },
   },

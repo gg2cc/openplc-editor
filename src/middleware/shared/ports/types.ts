@@ -163,7 +163,7 @@ export interface PLCGlobalVariable extends Omit<PLCVariable, 'class'> {
 // ---------------------------------------------------------------------------
 
 export type ServerProtocol = 'modbus-tcp' | 's7comm' | 'ethernet-ip' | 'opcua'
-export type RemoteDeviceProtocol = 'modbus-tcp' | 'ethernet-ip' | 'ethercat' | 'profinet'
+export type RemoteDeviceProtocol = 'modbus-tcp' | 'ethernet-ip' | 'ethercat' | 'profinet' | 'can'
 
 // Modbus
 export interface ModbusSlaveConfig {
@@ -410,12 +410,56 @@ export interface EthercatConfig {
   devices: ConfiguredEtherCATDevice[]
 }
 
+// CAN
+export interface CanHardwareConfig {
+  interface: string
+  bitrate: number
+  sjw?: number
+  samplePoint?: number
+  restartMs?: number
+  listenOnly?: boolean
+  loopback?: boolean
+  tripleSampling?: boolean
+  autoBringup?: boolean
+}
+
+export interface CanMapping {
+  byteOffset: number
+  iecType: string
+  iecIndex: number
+}
+
+export interface CanRxFrame {
+  canId: string
+  eff?: boolean
+  rtr?: boolean
+  dlc?: number
+  mappings?: CanMapping[]
+}
+
+export interface CanTxFrame {
+  canId: string
+  eff?: boolean
+  rtr?: boolean
+  dlc?: number
+  trigger?: 'cyclic' | 'on_change'
+  cycleTimeMs?: number
+  mappings?: CanMapping[]
+}
+
+export interface CanConfig {
+  hardwareConfig?: CanHardwareConfig
+  rxFrames?: CanRxFrame[]
+  txFrames?: CanTxFrame[]
+}
+
 // PLCRemoteDevice
 export interface PLCRemoteDevice {
   name: string
   protocol: RemoteDeviceProtocol
   modbusTcpConfig?: ModbusRemoteTcpConfig
   ethercatConfig?: EthercatConfig
+  canConfig?: CanConfig
 }
 
 // ---------------------------------------------------------------------------

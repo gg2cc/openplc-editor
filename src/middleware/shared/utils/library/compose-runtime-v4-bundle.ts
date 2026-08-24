@@ -90,6 +90,8 @@ export interface ComposeRuntimeV4BundleInput {
      *  run `validateEthercatConfig` first and abort the compile (not
      *  call the composer) when validation produces errors. */
     ethercat: string
+    /** From `generateCanConfig(remoteDevices)`. */
+    can?: string | null
   }
 }
 
@@ -142,6 +144,7 @@ export function composeRuntimeV4Bundle(input: ComposeRuntimeV4BundleInput): Reco
   if (input.confs.modbusMaster) files['conf/modbus_master.json'] = input.confs.modbusMaster
   if (input.confs.s7Comm) files['conf/s7comm.json'] = input.confs.s7Comm
   if (input.confs.opcUa) files['conf/opcua.json'] = input.confs.opcUa
+  if (input.confs.can) files['conf/can.json'] = input.confs.can
   files['conf/ethercat.json'] = input.confs.ethercat
 
   return files

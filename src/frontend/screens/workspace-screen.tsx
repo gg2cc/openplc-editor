@@ -17,6 +17,7 @@ import { ClearConsoleButton } from '../components/_atoms/buttons/console/clear-c
 import { BranchStatusBar } from '../components/_features/[workspace]/branches'
 import { DataTypeEditor } from '../components/_features/[workspace]/data-type'
 import { DeviceEditor } from '../components/_features/[workspace]/editor/device'
+import CanDeviceEditor from '../components/_features/[workspace]/editor/device/can'
 import { EtherCATDeviceEditor, EtherCATEditor } from '../components/_features/[workspace]/editor/device/ethercat'
 import { RemoteDeviceEditor } from '../components/_features/[workspace]/editor/device/remote-device'
 import { DiffViewerEditor } from '../components/_features/[workspace]/editor/diff-viewer'
@@ -576,9 +577,12 @@ const WorkspaceScreen = () => {
                         {editor['type'] === 'plc-remote-device' && editor.meta.protocol === 'ethercat' && (
                           <EtherCATEditor />
                         )}
-                        {editor['type'] === 'plc-remote-device' && editor.meta.protocol !== 'ethercat' && (
-                          <RemoteDeviceEditor />
+                        {editor['type'] === 'plc-remote-device' && editor.meta.protocol === 'can' && (
+                          <CanDeviceEditor />
                         )}
+                        {editor['type'] === 'plc-remote-device' &&
+                          editor.meta.protocol !== 'ethercat' &&
+                          editor.meta.protocol !== 'can' && <RemoteDeviceEditor />}
                         {editor['type'] === 'plc-server' && editor.meta.protocol === 'modbus-tcp' && (
                           <ModbusServerEditor />
                         )}

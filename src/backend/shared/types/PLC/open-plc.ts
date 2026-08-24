@@ -610,7 +610,7 @@ const ModbusTcpConfigSchema = z.object({
 })
 type ModbusTcpConfig = z.infer<typeof ModbusTcpConfigSchema>
 
-const PLCRemoteDeviceProtocolSchema = z.enum(['modbus-tcp', 'ethernet-ip', 'ethercat', 'profinet'])
+const PLCRemoteDeviceProtocolSchema = z.enum(['modbus-tcp', 'ethernet-ip', 'ethercat', 'profinet', 'can'])
 type PLCRemoteDeviceProtocol = z.infer<typeof PLCRemoteDeviceProtocolSchema>
 
 // ---- EtherCAT Configuration Schemas ----
@@ -758,11 +758,61 @@ const EthercatConfigSchema = z.object({
 })
 type EthercatConfig = z.infer<typeof EthercatConfigSchema>
 
+// ---- CAN Configuration Schemas ----
+
+const CanHardwareConfigSchema = z.object({
+  interface: z.string(),
+  bitrate: z.number(),
+  sjw: z.number().optional(),
+  samplePoint: z.number().optional(),
+  restartMs: z.number().optional(),
+  listenOnly: z.boolean().optional(),
+  loopback: z.boolean().optional(),
+  tripleSampling: z.boolean().optional(),
+  autoBringup: z.boolean().optional(),
+})
+type CanHardwareConfig = z.infer<typeof CanHardwareConfigSchema>
+
+const CanMappingSchema = z.object({
+  byteOffset: z.number(),
+  iecType: z.string(),
+  iecIndex: z.number(),
+})
+type CanMapping = z.infer<typeof CanMappingSchema>
+
+const CanRxFrameSchema = z.object({
+  canId: z.string(),
+  eff: z.boolean().optional(),
+  rtr: z.boolean().optional(),
+  dlc: z.number().optional(),
+  mappings: z.array(CanMappingSchema).optional(),
+})
+type CanRxFrame = z.infer<typeof CanRxFrameSchema>
+
+const CanTxFrameSchema = z.object({
+  canId: z.string(),
+  eff: z.boolean().optional(),
+  rtr: z.boolean().optional(),
+  dlc: z.number().optional(),
+  trigger: z.enum(['cyclic', 'on_change']).optional(),
+  cycleTimeMs: z.number().optional(),
+  mappings: z.array(CanMappingSchema).optional(),
+})
+type CanTxFrame = z.infer<typeof CanTxFrameSchema>
+
+const CanConfigSchema = z.object({
+  hardwareConfig: CanHardwareConfigSchema.optional(),
+  rxFrames: z.array(CanRxFrameSchema).optional(),
+  txFrames: z.array(CanTxFrameSchema).optional(),
+})
+type CanConfig = z.infer<typeof CanConfigSchema>
+
 const PLCRemoteDeviceSchema = z.object({
   name: z.string(),
   protocol: PLCRemoteDeviceProtocolSchema,
   modbusTcpConfig: ModbusTcpConfigSchema.optional(),
   ethercatConfig: EthercatConfigSchema.optional(),
+  canConfig: CanConfigSchema.optional(),
 })
 type PLCRemoteDevice = z.infer<typeof PLCRemoteDeviceSchema>
 
