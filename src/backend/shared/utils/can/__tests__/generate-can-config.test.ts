@@ -1,5 +1,6 @@
 import type { PLCRemoteDevice } from '../../../types/PLC/open-plc'
 import { generateCanConfig } from '../generate-can-config'
+import { generateCanopenConfig } from '../generate-canopen-config'
 
 describe('generateCanConfig', () => {
   it('returns null when no CAN remote device is configured', () => {
@@ -93,5 +94,52 @@ describe('generateCanConfig', () => {
     expect(output).toContain('"interface": "can1"')
     expect(output).toContain('"rx_frames"')
     expect(output).toContain('"tx_frames"')
+  })
+
+  it('creates a CANopen multi-bus config for up to 8 buses', () => {
+    const remoteDevices: PLCRemoteDevice[] = [
+      {
+        name: 'canopen-bus-0',
+        protocol: 'canopen',
+        canopenConfig: {
+          buses: [
+            {
+              name: 'bus0',
+              enabled: true,
+              interface: 'can0',
+              nodeId: 1,
+              bitrate: 500000,
+              heartbeatMs: 1000,
+              tpdo: [{ index: 0x1800, subIndex: 0, mapping: [{ index: 0x2000, subIndex: 0, bitLength: 16 }] }],
+            },
+          ],
+        },
+      },
+      {
+        name: 'canopen-bus-1',
+        protocol: 'canopen',
+        canopenConfig: {
+          buses: [
+            {
+              name: 'bus1',
+              enabled: true,
+              interface: 'can1',
+              nodeId: 2,
+              bitrate: 250000,
+              heartbeatMs: 2000,
+            },
+          ],
+        },
+      },
+    ]
+
+    const output = generateCanopenConfig(remoteDevices)
+
+    expect(output).not.toBeNull()
+    expect(output).toContain('"buses"')
+    expect(output).toContain('"interface": "can0"')
+    expect(output).toContain('"interface": "can1"')
+    expect(output).toContain('"node_id": 1')
+    expect(output).toContain('"node_id": 2')
   })
 })

@@ -1,6 +1,7 @@
 import type { RawProjectFile } from '../../../../middleware/shared/ports/project-port'
 import type {
   CanConfig,
+  CanopenConfig,
   EthercatConfig,
   ModbusBufferMapping,
   ModbusIOGroup,
@@ -335,6 +336,7 @@ export type ProjectActions = {
   updateIOPointAlias: (deviceName: string, groupId: string, pointId: string, alias: string) => ProjectResponse
   updateEthercatConfig: (deviceName: string, ethercatConfig: EthercatConfig) => ProjectResponse
   updateCanConfig: (deviceName: string, canConfig: CanConfig) => ProjectResponse
+  updateCanopenConfig: (deviceName: string, canopenConfig: CanopenConfig) => ProjectResponse
 }
 
 // ---------------------------------------------------------------------------

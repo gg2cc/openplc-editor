@@ -163,7 +163,7 @@ export interface PLCGlobalVariable extends Omit<PLCVariable, 'class'> {
 // ---------------------------------------------------------------------------
 
 export type ServerProtocol = 'modbus-tcp' | 's7comm' | 'ethernet-ip' | 'opcua'
-export type RemoteDeviceProtocol = 'modbus-tcp' | 'ethernet-ip' | 'ethercat' | 'profinet' | 'can'
+export type RemoteDeviceProtocol = 'modbus-tcp' | 'ethernet-ip' | 'ethercat' | 'profinet' | 'can' | 'canopen'
 
 // Modbus
 export interface ModbusSlaveConfig {
@@ -450,6 +450,35 @@ export interface CanConfig {
   txFrames?: CanTxFrame[]
 }
 
+export interface CanopenPdoMapping {
+  index: number
+  subIndex?: number
+  bitLength?: number
+  name?: string
+}
+
+export interface CanopenPdo {
+  index: number
+  subIndex?: number
+  mapping?: CanopenPdoMapping[]
+}
+
+export interface CanopenBusConfig {
+  name: string
+  enabled?: boolean
+  interface: string
+  nodeId: number
+  bitrate: number
+  heartbeatMs?: number
+  syncPeriodMs?: number
+  tpdo?: CanopenPdo[]
+  rpdo?: CanopenPdo[]
+}
+
+export interface CanopenConfig {
+  buses: CanopenBusConfig[]
+}
+
 // PLCRemoteDevice
 export interface PLCRemoteDevice {
   name: string
@@ -457,6 +486,7 @@ export interface PLCRemoteDevice {
   modbusTcpConfig?: ModbusRemoteTcpConfig
   ethercatConfig?: EthercatConfig
   canConfig?: CanConfig
+  canopenConfig?: CanopenConfig
 }
 
 // ---------------------------------------------------------------------------

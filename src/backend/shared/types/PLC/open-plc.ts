@@ -610,7 +610,7 @@ const ModbusTcpConfigSchema = z.object({
 })
 type ModbusTcpConfig = z.infer<typeof ModbusTcpConfigSchema>
 
-const PLCRemoteDeviceProtocolSchema = z.enum(['modbus-tcp', 'ethernet-ip', 'ethercat', 'profinet', 'can'])
+const PLCRemoteDeviceProtocolSchema = z.enum(['modbus-tcp', 'ethernet-ip', 'ethercat', 'profinet', 'can', 'canopen'])
 type PLCRemoteDeviceProtocol = z.infer<typeof PLCRemoteDeviceProtocolSchema>
 
 // ---- EtherCAT Configuration Schemas ----
@@ -804,12 +804,43 @@ const CanConfigSchema = z.object({
 })
 export type CanConfig = z.infer<typeof CanConfigSchema>
 
+const CanopenPdoMappingSchema = z.object({
+  index: z.number().int().min(0).max(0xffff),
+  subIndex: z.number().int().min(0).max(0xff).optional(),
+  bitLength: z.number().int().min(1).max(64).optional(),
+  name: z.string().optional(),
+})
+
+const CanopenPdoSchema = z.object({
+  index: z.number().int().min(0).max(0xffff),
+  subIndex: z.number().int().min(0).max(0xff).optional(),
+  mapping: z.array(CanopenPdoMappingSchema).optional(),
+})
+
+const CanopenBusConfigSchema = z.object({
+  name: z.string(),
+  enabled: z.boolean().optional(),
+  interface: z.string(),
+  nodeId: z.number().int().min(1).max(127),
+  bitrate: z.number().int().min(1000).max(1000000),
+  heartbeatMs: z.number().int().min(0).max(60000).optional(),
+  syncPeriodMs: z.number().int().min(0).max(60000).optional(),
+  tpdo: z.array(CanopenPdoSchema).optional(),
+  rpdo: z.array(CanopenPdoSchema).optional(),
+})
+
+const CanopenConfigSchema = z.object({
+  buses: z.array(CanopenBusConfigSchema).max(8),
+})
+export type CanopenConfig = z.infer<typeof CanopenConfigSchema>
+
 const PLCRemoteDeviceSchema = z.object({
   name: z.string(),
   protocol: PLCRemoteDeviceProtocolSchema,
   modbusTcpConfig: ModbusTcpConfigSchema.optional(),
   ethercatConfig: EthercatConfigSchema.optional(),
   canConfig: CanConfigSchema.optional(),
+  canopenConfig: CanopenConfigSchema.optional(),
 })
 type PLCRemoteDevice = z.infer<typeof PLCRemoteDeviceSchema>
 

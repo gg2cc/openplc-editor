@@ -49,7 +49,7 @@ type CreateServerFormProps = {
 
 type CreateRemoteDeviceFormProps = {
   name: string
-  protocol: 'modbus-tcp' | 'ethernet-ip' | 'ethercat' | 'profinet' | 'can'
+  protocol: 'modbus-tcp' | 'ethernet-ip' | 'ethercat' | 'profinet' | 'can' | 'canopen'
 }
 
 const ServerProtocolSources = [
@@ -62,6 +62,7 @@ const ServerProtocolSources = [
 const RemoteDeviceProtocolSources = [
   { value: 'modbus-tcp', label: 'Modbus', disabled: false },
   { value: 'can', label: 'CAN Bus', disabled: false },
+  { value: 'canopen', label: 'CANopen', disabled: false },
   { value: 'ethernet-ip', label: 'EtherNet/IP', disabled: true },
   { value: 'ethercat', label: 'EtherCAT', disabled: false },
   { value: 'profinet', label: 'PROFINET', disabled: true },

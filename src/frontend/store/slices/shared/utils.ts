@@ -164,7 +164,7 @@ export function createEditorObjectForServer(
 
 export function createEditorObjectForRemoteDevice(
   name: string,
-  protocol: 'modbus-tcp' | 'ethernet-ip' | 'ethercat' | 'profinet' | 'can',
+  protocol: 'modbus-tcp' | 'ethernet-ip' | 'ethercat' | 'profinet' | 'can' | 'canopen',
 ): EditorModel {
   return {
     type: 'plc-remote-device',

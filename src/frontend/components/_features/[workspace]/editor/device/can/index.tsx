@@ -504,6 +504,7 @@ const CanDeviceEditor = () => {
   } = useOpenPLCStore()
 
   const deviceName = editor.type === 'plc-remote-device' ? editor.meta.name : ''
+  const protocol = editor.type === 'plc-remote-device' ? editor.meta.protocol : null
 
   const device = useMemo(() => {
     return project.data.remoteDevices?.find((d) => d.name === deviceName)
@@ -531,11 +532,11 @@ const CanDeviceEditor = () => {
   // Update store helper
   const updateStore = useCallback(
     (newConfig: CanConfig) => {
-      if (!deviceName) return
+      if (!deviceName || protocol !== 'can') return
       projectActions.updateCanConfig(deviceName, newConfig)
       handleFileAndWorkspaceSavedState(deviceName)
     },
-    [deviceName, projectActions, handleFileAndWorkspaceSavedState],
+    [deviceName, protocol, projectActions, handleFileAndWorkspaceSavedState],
   )
 
   // Handlers for Hardware config
@@ -585,7 +586,7 @@ const CanDeviceEditor = () => {
       <div className='mb-6 flex items-center justify-between border-b border-neutral-200 pb-4 dark:border-neutral-800'>
         <div>
           <h1 className='font-display text-xl font-bold text-neutral-950 dark:text-white'>{deviceName}</h1>
-          <p className='text-sm text-neutral-600 dark:text-neutral-400'>Protocol: CAN Bus (SocketCAN)</p>
+          <p className='text-sm text-neutral-600 dark:text-neutral-400'>Protocol: CAN</p>
         </div>
       </div>
 

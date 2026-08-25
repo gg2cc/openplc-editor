@@ -43,6 +43,7 @@ import { generateEthercatConfig } from '../../ethercat/generate-ethercat-config'
 import { validateEthercatConfig } from '../../ethercat/validate-ethercat-config'
 import type { PLCRemoteDevice, PLCServer } from '../../types/PLC/open-plc'
 import { generateCanConfig } from '../../utils/can/generate-can-config'
+import { generateCanopenConfig } from '../../utils/can/generate-canopen-config'
 import { generateModbusMasterConfig } from '../../utils/modbus/generate-modbus-master-config'
 
 /**
@@ -94,6 +95,7 @@ export interface GenerateConfsOutput {
    *  passed validation. */
   ethercat: string | null
   can: string | null
+  canopen: string | null
 }
 
 /**
@@ -155,6 +157,7 @@ export function generateRuntimeConfs(input: GenerateConfsInput): GenerateConfsOu
   }
 
   const can = generateCanConfig(remoteDevices)
+  const canopen = generateCanopenConfig(remoteDevices)
 
-  return { modbusSlave, modbusMaster, s7Comm, opcUa, ethercat, can }
+  return { modbusSlave, modbusMaster, s7Comm, opcUa, ethercat, can, canopen }
 }

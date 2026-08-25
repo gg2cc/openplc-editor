@@ -1660,6 +1660,20 @@ const createProjectSlice: StateCreator<ProjectSliceRoot, [], [], ProjectSlice> =
               txFrames: [],
             }
           }
+          if (device.protocol === 'canopen' && !device.canopenConfig) {
+            device.canopenConfig = {
+              buses: [
+                {
+                  name: 'bus0',
+                  enabled: true,
+                  interface: 'can0',
+                  nodeId: 1,
+                  bitrate: 500000,
+                  heartbeatMs: 1000,
+                },
+              ],
+            }
+          }
           slice.project.data.remoteDevices.push(device)
 
           // EtherCAT bus is driven by a dedicated thread inside the
@@ -2041,6 +2055,32 @@ const createProjectSlice: StateCreator<ProjectSliceRoot, [], [], ProjectSlice> =
             return
           }
           device.canConfig = canConfig
+        }),
+      )
+      return response
+    },
+    updateCanopenConfig: (deviceName, canopenConfig) => {
+      let response = ok()
+      setState(
+        produce((slice: ProjectSlice) => {
+          if (!slice.project.data.remoteDevices) {
+            response = { ok: false, message: 'No remote devices found' }
+            return
+          }
+          const device = slice.project.data.remoteDevices.find((d) => d.name === deviceName)
+          if (!device) {
+            response = { ok: false, message: 'Remote device not found' }
+            return
+          }
+          if (device.protocol !== 'canopen') {
+            response = { ok: false, message: 'Device is not a CANopen device' }
+            return
+          }
+          if (canopenConfig.buses.length > 8) {
+            response = { ok: false, message: 'CANopen supports at most 8 buses' }
+            return
+          }
+          device.canopenConfig = canopenConfig
         }),
       )
       return response
