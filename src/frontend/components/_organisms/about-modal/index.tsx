@@ -35,14 +35,14 @@ const AboutModal = () => {
   }
   const title = `${typeof APP_NAME !== 'undefined' ? APP_NAME : 'OpenPLC'} ${APP_VERSION}`
   const releaseDate = `Release: ${typeof BUILD_DATE !== 'undefined' ? BUILD_DATE : ''}`
-  const description = 'Open Source IDE for the OpenPLC Runtime, compliant with the IEC 61131-3 international standard.'
+  const description = 'Huiz AMR IDE for the Runtime, compliant with the IEC 61131-3 international standard.'
   const copyrightYear = new Date().getFullYear()
-  const copyright = `\u00A9 ${copyrightYear} Autonomy Logic`
-  const linkUrl = 'https://autonomylogic.com'
+  const copyright = `\u00A9 ${copyrightYear} Original Copyright Autonomy Logic, Modified version Copyright (c) 2026 Ningbo Huizhen.`
+//   const linkUrl = 'https://autonomylogic.com'
 
-  const handleOpenAboutLink = () => {
-    void system.openExternalLink(linkUrl)
-  }
+//   const handleOpenAboutLink = () => {
+//     void system.openExternalLink(linkUrl)
+//   }
 
   const [isAboutOpen, setIsAboutOpen] = useState(false)
 
@@ -77,11 +77,11 @@ const AboutModal = () => {
             <p className='mt-4'>{description}</p>
           </div>
           <p className='mt-4'>{copyright}</p>
-          <p className='mt-4'>
+          {/* <p className='mt-4'>
             <button onClick={() => void handleOpenAboutLink()} className='text-[#0464fb] underline'>
               {linkUrl}
             </button>
-          </p>
+          </p> */}
         </div>
 
         <div className='my-4 flex justify-center gap-3 text-sm font-medium dark:text-neutral-100'>
