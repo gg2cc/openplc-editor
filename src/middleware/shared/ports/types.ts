@@ -469,6 +469,10 @@ export interface CanopenBusConfig {
   interface: string
   nodeId: number
   bitrate: number
+  sjw?: number
+  samplePoint?: number
+  restartMs?: number
+  tripleSampling?: boolean
   heartbeatMs?: number
   syncPeriodMs?: number
   tpdo?: CanopenPdo[]

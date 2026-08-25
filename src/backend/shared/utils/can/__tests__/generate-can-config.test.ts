@@ -109,6 +109,10 @@ describe('generateCanConfig', () => {
               interface: 'can0',
               nodeId: 1,
               bitrate: 500000,
+              sjw: 1,
+              samplePoint: 0.875,
+              restartMs: 100,
+              tripleSampling: false,
               heartbeatMs: 1000,
               tpdo: [{ index: 0x1800, subIndex: 0, mapping: [{ index: 0x2000, subIndex: 0, bitLength: 16 }] }],
             },
@@ -141,5 +145,9 @@ describe('generateCanConfig', () => {
     expect(output).toContain('"interface": "can1"')
     expect(output).toContain('"node_id": 1')
     expect(output).toContain('"node_id": 2')
+    expect(output).toContain('"sjw": 1')
+    expect(output).toContain('"sample_point": 0.875')
+    expect(output).toContain('"restart_ms": 100')
+    expect(output).toContain('"triple_sampling": false')
   })
 })

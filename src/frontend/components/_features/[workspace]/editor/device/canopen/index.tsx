@@ -40,6 +40,10 @@ const defaultCanopenBus = (): CanopenBusConfig => ({
   interface: 'can0',
   nodeId: 1,
   bitrate: 500000,
+  sjw: 1,
+  samplePoint: 0.875,
+  restartMs: 100,
+  tripleSampling: false,
   heartbeatMs: 1000,
   syncPeriodMs: 0,
   tpdo: [],
@@ -312,6 +316,54 @@ const CanopenDeviceEditor = () => {
                         ))}
                       </SelectContent>
                     </Select>
+                  </div>
+                  <div className='flex flex-col gap-1.5'>
+                    <Label className='text-xs text-neutral-700 dark:text-neutral-300'>SJW (再同步跳转宽度)</Label>
+                    <InputWithRef
+                      type='number'
+                      min={1}
+                      max={4}
+                      value={bus.sjw ?? 1}
+                      onChange={(e) =>
+                        handleCanopenBusChange(busIndex, {
+                          sjw: Math.min(4, Math.max(1, Number(e.target.value) || 1)),
+                        })
+                      }
+                      className={inputStyles}
+                    />
+                  </div>
+                  <div className='flex flex-col gap-1.5'>
+                    <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Sample Point (采样点比例)</Label>
+                    <InputWithRef
+                      type='number'
+                      step='0.005'
+                      min={0.5}
+                      max={0.95}
+                      value={bus.samplePoint ?? 0.875}
+                      onChange={(e) =>
+                        handleCanopenBusChange(busIndex, {
+                          samplePoint: Math.min(0.95, Math.max(0.5, Number(e.target.value) || 0.875)),
+                        })
+                      }
+                      className={inputStyles}
+                    />
+                  </div>
+                  <div className='flex flex-col gap-1.5'>
+                    <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Bus-Off Restart (重启时间 ms)</Label>
+                    <InputWithRef
+                      type='number'
+                      min={0}
+                      value={bus.restartMs ?? 100}
+                      onChange={(e) => handleCanopenBusChange(busIndex, { restartMs: Number(e.target.value) || 0 })}
+                      className={inputStyles}
+                    />
+                  </div>
+                  <div className='flex items-center gap-2 pt-5'>
+                    <ToggleSwitch
+                      checked={bus.tripleSampling ?? false}
+                      onCheckedChange={(checked) => handleCanopenBusChange(busIndex, { tripleSampling: checked })}
+                    />
+                    <Label className='cursor-pointer text-xs text-neutral-700 dark:text-neutral-300'>Triple Sampling (三重采样)</Label>
                   </div>
                   <div className='flex flex-col gap-1.5'>
                     <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Heartbeat (心跳 ms)</Label>

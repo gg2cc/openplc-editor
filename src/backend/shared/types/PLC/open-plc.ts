@@ -763,9 +763,9 @@ type EthercatConfig = z.infer<typeof EthercatConfigSchema>
 const CanHardwareConfigSchema = z.object({
   interface: z.string(),
   bitrate: z.number(),
-  sjw: z.number().optional(),
-  samplePoint: z.number().optional(),
-  restartMs: z.number().optional(),
+  sjw: z.number().int().min(1).max(4).optional(),
+  samplePoint: z.number().min(0.5).max(0.95).optional(),
+  restartMs: z.number().int().min(0).max(60000).optional(),
   tripleSampling: z.boolean().optional(),
 })
 export type CanHardwareConfig = z.infer<typeof CanHardwareConfigSchema>
@@ -823,6 +823,10 @@ const CanopenBusConfigSchema = z.object({
   interface: z.string(),
   nodeId: z.number().int().min(1).max(127),
   bitrate: z.number().int().min(1000).max(1000000),
+  sjw: z.number().int().min(1).max(4).optional(),
+  samplePoint: z.number().min(0.5).max(0.95).optional(),
+  restartMs: z.number().int().min(0).max(60000).optional(),
+  tripleSampling: z.boolean().optional(),
   heartbeatMs: z.number().int().min(0).max(60000).optional(),
   syncPeriodMs: z.number().int().min(0).max(60000).optional(),
   tpdo: z.array(CanopenPdoSchema).optional(),
