@@ -1104,6 +1104,7 @@ export interface PluginStatsField {
 export interface PluginStatsPayload {
   label: string
   fields: PluginStatsField[]
+  interfaces?: Record<string, PluginStatsPayload>
 }
 
 /**

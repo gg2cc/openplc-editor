@@ -8,6 +8,54 @@ interface PluginStatsPanelProps {
   pluginStats: TimingStats['plugin_stats']
 }
 
+interface FlattenedPluginStatsEntry {
+  key: string
+  title: string
+  fields: PluginStatsField[]
+}
+
+const flattenPluginStats = (
+  pluginName: string,
+  payload: PluginStatsPayload | Record<string, PluginStatsPayload> | undefined,
+): FlattenedPluginStatsEntry[] => {
+  if (!payload || typeof payload !== 'object') return []
+
+  const hasInterfaceGroup =
+    'interfaces' in payload &&
+    payload.interfaces &&
+    typeof payload.interfaces === 'object' &&
+    !Array.isArray(payload.interfaces)
+
+  if (hasInterfaceGroup) {
+    const groupedInterfaces = payload.interfaces as Record<string, PluginStatsPayload>
+    return Object.entries(groupedInterfaces).map(([ifaceName, ifacePayload]) => ({
+      key: `${pluginName}-${ifaceName}`,
+      title: ifacePayload?.label ?? `${pluginName} (${ifaceName})`,
+      fields: ifacePayload?.fields ?? [],
+    }))
+  }
+
+  const legacyPayload = payload as PluginStatsPayload
+  if ('label' in legacyPayload && 'fields' in legacyPayload && Array.isArray(legacyPayload.fields)) {
+    return [
+      {
+        key: `${pluginName}`,
+        title: legacyPayload.label,
+        fields: legacyPayload.fields,
+      },
+    ]
+  }
+
+  return Object.entries(payload).map(([key, val]) => ({
+    key: `${pluginName}-${key}`,
+    title: val && typeof val === 'object' && 'label' in val ? String(val.label) : `${pluginName} (${key})`,
+    fields:
+      val && typeof val === 'object' && 'fields' in val && Array.isArray(val.fields)
+        ? (val.fields as PluginStatsField[])
+        : [],
+  }))
+}
+
 const renderField = (field: PluginStatsField) => {
   const display = typeof field.value === 'boolean' ? (field.value ? 'Yes' : 'No') : field.value
   return (
@@ -42,27 +90,27 @@ export const PluginStatsPanel = ({ pluginStats }: PluginStatsPanelProps) => {
 
   return (
     <>
-      {Object.entries(pluginStats).map(([pluginName, payload]) => {
-        // Build one column per field. The row IS the payload itself —
-        // each column's render() pulls the i-th field from it. We close
-        // over the index so adding/removing fields between polls
-        // re-derives the columns array correctly.
-        const columns: StatsTableColumn<PluginStatsPayload>[] = payload.fields.map((field, idx) => ({
-          key: `${pluginName}-${idx}`,
-          header: field.label,
-          render: (p) => renderField(p.fields[idx]),
-        }))
+      {Object.entries(pluginStats).flatMap(([pluginName, payload]) => {
+        const flattenedRows = flattenPluginStats(pluginName, payload as PluginStatsPayload | Record<string, PluginStatsPayload>)
 
-        return (
-          <StatsTable
-            key={pluginName}
-            context={`plugin-stats-${pluginName}`}
-            title={payload.label}
-            columns={columns}
-            rows={[payload]}
-            rowKey={() => pluginName}
-          />
-        )
+        return flattenedRows.map((row) => {
+          const columns: StatsTableColumn<{ fields: PluginStatsField[] }>[] = row.fields.map((field, idx) => ({
+            key: `${row.key}-${idx}`,
+            header: field.label,
+            render: (p) => renderField(p.fields[idx]),
+          }))
+
+          return (
+            <StatsTable
+              key={row.key}
+              context={`plugin-stats-${row.key}`}
+              title={row.title}
+              columns={columns}
+              rows={[{ fields: row.fields }]}
+              rowKey={() => row.key}
+            />
+          )
+        })
       })}
     </>
   )
