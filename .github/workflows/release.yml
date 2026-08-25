@@ -53,6 +53,11 @@ jobs:
           else
             VERSION=$(node -p "require('./package.json').version")
           fi
+          SANITIZED_VERSION="${VERSION//_/-}"
+          if [ "$SANITIZED_VERSION" != "$VERSION" ]; then
+            echo "Sanitized version for npm compatibility: $VERSION -> $SANITIZED_VERSION"
+            VERSION="$SANITIZED_VERSION"
+          fi
           BUILD_DATE=$(date +%Y-%m-%d)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "build_date=$BUILD_DATE" >> $GITHUB_OUTPUT
@@ -165,6 +170,11 @@ jobs:
           else
             VERSION=$(node -p "require('./package.json').version")
           fi
+          SANITIZED_VERSION="${VERSION//_/-}"
+          if [ "$SANITIZED_VERSION" != "$VERSION" ]; then
+            echo "Sanitized version for npm compatibility: $VERSION -> $SANITIZED_VERSION"
+            VERSION="$SANITIZED_VERSION"
+          fi
           BUILD_DATE=$(date +%Y-%m-%d)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "build_date=$BUILD_DATE" >> $GITHUB_OUTPUT
@@ -247,6 +257,11 @@ jobs:
           else
             VERSION=$(node -p "require('./package.json').version")
           fi
+          SANITIZED_VERSION="${VERSION//_/-}"
+          if [ "$SANITIZED_VERSION" != "$VERSION" ]; then
+            echo "Sanitized version for npm compatibility: $VERSION -> $SANITIZED_VERSION"
+            VERSION="$SANITIZED_VERSION"
+          fi
           BUILD_DATE=$(date +%Y-%m-%d)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "build_date=$BUILD_DATE" >> $GITHUB_OUTPUT
@@ -320,6 +335,11 @@ jobs:
           else
             VERSION=$(node -p "require('./package.json').version")
           fi
+          SANITIZED_VERSION="${VERSION//_/-}"
+          if [ "$SANITIZED_VERSION" != "$VERSION" ]; then
+            echo "Sanitized version for npm compatibility: $VERSION -> $SANITIZED_VERSION"
+            VERSION="$SANITIZED_VERSION"
+          fi
           BUILD_DATE=$(date +%Y-%m-%d)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "build_date=$BUILD_DATE" >> $GITHUB_OUTPUT
@@ -377,6 +397,11 @@ jobs:
             VERSION="${VERSION#v}"
           else
             VERSION=$(node -p "require('./package.json').version")
+          fi
+          SANITIZED_VERSION="${VERSION//_/-}"
+          if [ "$SANITIZED_VERSION" != "$VERSION" ]; then
+            echo "Sanitized version for npm compatibility: $VERSION -> $SANITIZED_VERSION"
+            VERSION="$SANITIZED_VERSION"
           fi
           BUILD_DATE=$(date +%Y-%m-%d)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
