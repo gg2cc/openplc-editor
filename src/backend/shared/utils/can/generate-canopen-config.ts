@@ -27,6 +27,16 @@ export function generateCanopenConfig(remoteDevices: PLCRemoteDevice[] | undefin
       triple_sampling: bus.tripleSampling ?? false,
       heartbeat_ms: bus.heartbeatMs ?? 1000,
       sync_period_ms: bus.syncPeriodMs ?? 0,
+      od_entries: (bus.odEntries ?? []).map((entry) => ({
+        name: entry.name ?? '',
+        index: entry.index,
+        sub_index: entry.subIndex ?? 0,
+        data_type: entry.dataType ?? 'u32',
+        access: entry.access ?? 'rw',
+        default_value: entry.defaultValue ?? 0,
+        description: entry.description ?? '',
+        pdo_map: entry.pdoMap ?? null,
+      })),
       tpdo: (bus.tpdo ?? []).map((pdo) => ({
         index: pdo.index,
         sub_index: pdo.subIndex ?? 0,

@@ -463,6 +463,30 @@ export interface CanopenPdo {
   mapping?: CanopenPdoMapping[]
 }
 
+export interface CanopenOdEntry {
+  name?: string
+  index: number
+  subIndex?: number
+  dataType?:
+    | 'bool'
+    | 'i8'
+    | 'u8'
+    | 'i16'
+    | 'u16'
+    | 'i32'
+    | 'u32'
+    | 'i64'
+    | 'u64'
+    | 'f32'
+    | 'f64'
+    | 'string'
+    | 'bytes'
+  access?: 'ro' | 'wo' | 'rw' | 'rwr' | 'const'
+  defaultValue?: number | string | boolean | null
+  description?: string
+  pdoMap?: 'tpdo' | 'rpdo'
+}
+
 export interface CanopenBusConfig {
   name: string
   enabled?: boolean
@@ -475,6 +499,7 @@ export interface CanopenBusConfig {
   tripleSampling?: boolean
   heartbeatMs?: number
   syncPeriodMs?: number
+  odEntries?: CanopenOdEntry[]
   tpdo?: CanopenPdo[]
   rpdo?: CanopenPdo[]
 }

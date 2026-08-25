@@ -96,7 +96,7 @@ describe('generateCanConfig', () => {
     expect(output).toContain('"tx_frames"')
   })
 
-  it('creates a CANopen multi-bus config for up to 8 buses', () => {
+  it('creates a CANopen multi-bus config for up to 8 buses and includes OD entries', () => {
     const remoteDevices: PLCRemoteDevice[] = [
       {
         name: 'canopen-bus-0',
@@ -114,6 +114,16 @@ describe('generateCanConfig', () => {
               restartMs: 100,
               tripleSampling: false,
               heartbeatMs: 1000,
+              odEntries: [
+                {
+                  name: 'deviceType',
+                  index: 0x1000,
+                  subIndex: 0,
+                  dataType: 'u32',
+                  access: 'ro',
+                  defaultValue: 0,
+                },
+              ],
               tpdo: [{ index: 0x1800, subIndex: 0, mapping: [{ index: 0x2000, subIndex: 0, bitLength: 16 }] }],
             },
           ],
@@ -149,5 +159,9 @@ describe('generateCanConfig', () => {
     expect(output).toContain('"sample_point": 0.875')
     expect(output).toContain('"restart_ms": 100')
     expect(output).toContain('"triple_sampling": false')
+    expect(output).toContain('"od_entries"')
+    expect(output).toContain('"index": 4096')
+    expect(output).toContain('"data_type": "u32"')
+    expect(output).toContain('"access": "ro"')
   })
 })

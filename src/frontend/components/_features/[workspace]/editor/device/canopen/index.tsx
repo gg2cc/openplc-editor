@@ -2,6 +2,7 @@ import { Pencil1Icon, TrashIcon } from '@radix-ui/react-icons'
 import type {
   CanopenBusConfig,
   CanopenConfig,
+  CanopenOdEntry,
   CanopenPdo,
   CanopenPdoMapping,
 } from '@root/middleware/shared/ports/types'
@@ -46,6 +47,7 @@ const defaultCanopenBus = (): CanopenBusConfig => ({
   tripleSampling: false,
   heartbeatMs: 1000,
   syncPeriodMs: 0,
+  odEntries: [],
   tpdo: [],
   rpdo: [],
 })
@@ -205,6 +207,155 @@ const CanopenDeviceEditor = () => {
     nextBuses[busIndex] = { ...nextBuses[busIndex], [pdoType]: nextPdoList }
     updateCanopenStore({ buses: nextBuses })
   }
+
+  const normalizeCanopenOdEntry = useCallback((raw: unknown): CanopenOdEntry | null => {
+    if (!raw || typeof raw !== 'object') return null
+
+    const entry = raw as Record<string, unknown>
+    const parseIntValue = (value: unknown, fallback = 0): number => {
+      if (typeof value === 'number' && Number.isFinite(value)) return value
+      if (typeof value === 'string') {
+        const trimmed = value.trim()
+        if (!trimmed) return fallback
+        const asHex = trimmed.startsWith('0x') || trimmed.startsWith('0X')
+        return Number.parseInt(trimmed, asHex ? 16 : 10)
+      }
+      return fallback
+    }
+    const parseType = (value: unknown): CanopenOdEntry['dataType'] => {
+      const typed = String(value ?? '').trim().toLowerCase()
+      if (!typed) return 'u32'
+      const map: Record<string, CanopenOdEntry['dataType']> = {
+        bool: 'bool',
+        boolean: 'bool',
+        int8: 'i8',
+        i8: 'i8',
+        uint8: 'u8',
+        u8: 'u8',
+        int16: 'i16',
+        i16: 'i16',
+        uint16: 'u16',
+        u16: 'u16',
+        int32: 'i32',
+        i32: 'i32',
+        uint32: 'u32',
+        u32: 'u32',
+        int64: 'i64',
+        i64: 'i64',
+        uint64: 'u64',
+        u64: 'u64',
+        float32: 'f32',
+        f32: 'f32',
+        float64: 'f64',
+        f64: 'f64',
+        string: 'string',
+        bytes: 'bytes',
+      }
+      return map[typed] ?? 'u32'
+    }
+    const parseAccess = (value: unknown): CanopenOdEntry['access'] => {
+      const access = String(value ?? '').trim().toLowerCase()
+      const map: Record<string, CanopenOdEntry['access']> = {
+        ro: 'ro',
+        wo: 'wo',
+        rw: 'rw',
+        rwr: 'rwr',
+        const: 'const',
+      }
+      return map[access] ?? 'rw'
+    }
+    const index = parseIntValue(entry.index ?? entry.odIndex ?? entry.idx ?? 0)
+    const subIndex = parseIntValue(entry.subIndex ?? entry.subindex ?? 0)
+    const rawDefaultValue = entry.defaultValue ?? entry.default ?? 0
+    const defaultValue =
+      typeof rawDefaultValue === 'number' || typeof rawDefaultValue === 'string' || typeof rawDefaultValue === 'boolean'
+        ? rawDefaultValue
+        : rawDefaultValue === null
+          ? null
+          : 0
+    const pdoMapValue = typeof entry.pdoMap === 'string' ? entry.pdoMap.toLowerCase() : undefined
+
+    return {
+      name: String(entry.name ?? entry.label ?? `entry_${index.toString(16)}`),
+      index,
+      subIndex: subIndex > 0xff ? 0 : subIndex,
+      dataType: parseType(entry.dataType ?? entry.type),
+      access: parseAccess(entry.access),
+      defaultValue,
+      description: typeof entry.description === 'string' ? entry.description : '',
+      pdoMap: pdoMapValue === 'tpdo' || pdoMapValue === 'rpdo' ? pdoMapValue : undefined,
+    }
+  }, [])
+
+  const handleCanopenOdEntryChange = useCallback(
+    (busIndex: number, entryIndex: number, updates: Partial<CanopenOdEntry>) => {
+      const nextBuses = [...canopenConfig.buses]
+      const current = nextBuses[busIndex]?.odEntries ?? []
+      const nextEntries = [...current]
+      nextEntries[entryIndex] = { ...(nextEntries[entryIndex] ?? { index: 0x1000, dataType: 'u32', access: 'rw' }), ...updates }
+      nextBuses[busIndex] = { ...nextBuses[busIndex], odEntries: nextEntries }
+      updateCanopenStore({ buses: nextBuses })
+    },
+    [canopenConfig, updateCanopenStore],
+  )
+
+  const handleAddCanopenOdEntry = useCallback(
+    (busIndex: number) => {
+      const nextBuses = [...canopenConfig.buses]
+      const nextEntries = [...(nextBuses[busIndex]?.odEntries ?? [])]
+      nextEntries.push({ name: `entry_${nextEntries.length + 1}`, index: 0x1000 + nextEntries.length, subIndex: 0, dataType: 'u32', access: 'rw', defaultValue: 0 })
+      nextBuses[busIndex] = { ...nextBuses[busIndex], odEntries: nextEntries }
+      updateCanopenStore({ buses: nextBuses })
+    },
+    [canopenConfig, updateCanopenStore],
+  )
+
+  const handleRemoveCanopenOdEntry = useCallback(
+    (busIndex: number, entryIndex: number) => {
+      const nextBuses = [...canopenConfig.buses]
+      nextBuses[busIndex] = {
+        ...nextBuses[busIndex],
+        odEntries: (nextBuses[busIndex]?.odEntries ?? []).filter((_, i) => i !== entryIndex),
+      }
+      updateCanopenStore({ buses: nextBuses })
+    },
+    [canopenConfig, updateCanopenStore],
+  )
+
+  const handleImportCanopenOd = useCallback(
+    async (busIndex: number, event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0]
+      if (!file) return
+
+      try {
+        const text = await file.text()
+        const parsed = JSON.parse(text) as unknown
+        const candidates = Array.isArray(parsed)
+          ? parsed
+          : Array.isArray((parsed as { odEntries?: unknown[] })?.odEntries)
+            ? (parsed as { odEntries: unknown[] }).odEntries
+            : Array.isArray((parsed as { objectDictionary?: unknown[] })?.objectDictionary)
+              ? (parsed as { objectDictionary: unknown[] }).objectDictionary
+              : []
+
+        const normalized = candidates
+          .map((entry) => normalizeCanopenOdEntry(entry))
+          .filter((entry): entry is CanopenOdEntry => entry !== null)
+
+        if (normalized.length === 0) return
+
+        const nextBuses = [...canopenConfig.buses]
+        const currentEntries = nextBuses[busIndex]?.odEntries ?? []
+        nextBuses[busIndex] = { ...nextBuses[busIndex], odEntries: [...currentEntries, ...normalized] }
+        updateCanopenStore({ buses: nextBuses })
+      } catch (error) {
+        console.warn('Failed to import CANopen OD JSON', error)
+      } finally {
+        event.target.value = ''
+      }
+    },
+    [canopenConfig, normalizeCanopenOdEntry, updateCanopenStore],
+  )
 
   return (
     <div className='flex h-full w-full flex-col overflow-y-auto bg-neutral-100 p-6 dark:bg-neutral-900'>
@@ -385,6 +536,161 @@ const CanopenDeviceEditor = () => {
                       className={inputStyles}
                     />
                   </div>
+                </div>
+
+                <div className='mt-5 rounded border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-950'>
+                  <div className='mb-3 flex items-center justify-between'>
+                    <h3 className='text-xs font-semibold uppercase tracking-[0.12em] text-neutral-700 dark:text-neutral-300'>
+                      Object Dictionary
+                    </h3>
+                    <div className='flex items-center gap-2'>
+                      <button
+                        type='button'
+                        onClick={() => handleAddCanopenOdEntry(busIndex)}
+                        className='flex items-center gap-1 rounded bg-brand px-2 py-1 text-[11px] font-medium text-white hover:bg-brand-medium-dark'
+                      >
+                        <PlusIcon className='h-3 w-3 stroke-white' />
+                        Add Entry
+                      </button>
+                      <label className='flex cursor-pointer items-center gap-1 rounded bg-neutral-700 px-2 py-1 text-[11px] font-medium text-white hover:bg-neutral-800 dark:bg-neutral-700 dark:hover:bg-neutral-600'>
+                        Import OD
+                        <input
+                          type='file'
+                          accept='.json,.txt,.eds'
+                          className='hidden'
+                          onChange={(event) => void handleImportCanopenOd(busIndex, event)}
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  {(bus.odEntries ?? []).length === 0 ? (
+                    <p className='text-xs italic text-neutral-500'>No object dictionary entries defined.</p>
+                  ) : (
+                    <div className='space-y-2'>
+                      {(bus.odEntries ?? []).map((entry, entryIndex) => (
+                        <div key={`${bus.name}-od-${entryIndex}`} className='grid grid-cols-7 gap-2 rounded border border-neutral-200 bg-neutral-50 p-2 dark:border-neutral-800 dark:bg-neutral-900'>
+                          <div className='flex flex-col gap-1'>
+                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Name</Label>
+                            <InputWithRef
+                              value={entry.name ?? ''}
+                              onChange={(e) =>
+                                handleCanopenOdEntryChange(busIndex, entryIndex, { name: e.target.value || `entry_${entryIndex + 1}` })
+                              }
+                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
+                            />
+                          </div>
+                          <div className='flex flex-col gap-1'>
+                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Index</Label>
+                            <InputWithRef
+                              type='number'
+                              value={entry.index}
+                              onChange={(e) =>
+                                handleCanopenOdEntryChange(busIndex, entryIndex, {
+                                  index: Number(e.target.value) || 0,
+                                })
+                              }
+                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
+                            />
+                          </div>
+                          <div className='flex flex-col gap-1'>
+                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Sub</Label>
+                            <InputWithRef
+                              type='number'
+                              value={entry.subIndex ?? 0}
+                              onChange={(e) =>
+                                handleCanopenOdEntryChange(busIndex, entryIndex, {
+                                  subIndex: Number(e.target.value) || 0,
+                                })
+                              }
+                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
+                            />
+                          </div>
+                          <div className='flex flex-col gap-1'>
+                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Type</Label>
+                            <select
+                              value={entry.dataType ?? 'u32'}
+                              onChange={(e) =>
+                                handleCanopenOdEntryChange(busIndex, entryIndex, {
+                                  dataType: (e.target.value as CanopenOdEntry['dataType']) ?? 'u32',
+                                })
+                              }
+                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
+                            >
+                              <option value='bool'>bool</option>
+                              <option value='u8'>u8</option>
+                              <option value='i8'>i8</option>
+                              <option value='u16'>u16</option>
+                              <option value='i16'>i16</option>
+                              <option value='u32'>u32</option>
+                              <option value='i32'>i32</option>
+                              <option value='u64'>u64</option>
+                              <option value='i64'>i64</option>
+                              <option value='f32'>f32</option>
+                              <option value='f64'>f64</option>
+                              <option value='string'>string</option>
+                              <option value='bytes'>bytes</option>
+                            </select>
+                          </div>
+                          <div className='flex flex-col gap-1'>
+                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Access</Label>
+                            <select
+                              value={entry.access ?? 'rw'}
+                              onChange={(e) =>
+                                handleCanopenOdEntryChange(busIndex, entryIndex, {
+                                  access: (e.target.value as CanopenOdEntry['access']) ?? 'rw',
+                                })
+                              }
+                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
+                            >
+                              <option value='ro'>ro</option>
+                              <option value='wo'>wo</option>
+                              <option value='rw'>rw</option>
+                              <option value='rwr'>rwr</option>
+                              <option value='const'>const</option>
+                            </select>
+                          </div>
+                          <div className='flex flex-col gap-1'>
+                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Default</Label>
+                            <InputWithRef
+                              value={String(entry.defaultValue ?? 0)}
+                              onChange={(e) =>
+                                handleCanopenOdEntryChange(busIndex, entryIndex, {
+                                  defaultValue: e.target.value,
+                                })
+                              }
+                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
+                            />
+                          </div>
+                          <div className='flex flex-col gap-1'>
+                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>PDO</Label>
+                            <select
+                              value={entry.pdoMap ?? ''}
+                              onChange={(e) =>
+                                handleCanopenOdEntryChange(busIndex, entryIndex, {
+                                  pdoMap: (e.target.value as CanopenOdEntry['pdoMap']) || undefined,
+                                })
+                              }
+                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
+                            >
+                              <option value=''>-</option>
+                              <option value='tpdo'>tpdo</option>
+                              <option value='rpdo'>rpdo</option>
+                            </select>
+                          </div>
+                          <div className='flex items-end justify-center'>
+                            <button
+                              type='button'
+                              onClick={() => handleRemoveCanopenOdEntry(busIndex, entryIndex)}
+                              className='text-neutral-500 hover:text-red-500'
+                            >
+                              <TrashIcon className='h-3.5 w-3.5' />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {(['tpdo', 'rpdo'] as const).map((pdoType) => (

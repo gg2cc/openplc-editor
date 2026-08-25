@@ -817,6 +817,17 @@ const CanopenPdoSchema = z.object({
   mapping: z.array(CanopenPdoMappingSchema).optional(),
 })
 
+const CanopenOdEntrySchema = z.object({
+  name: z.string().optional(),
+  index: z.number().int().min(0).max(0xffff),
+  subIndex: z.number().int().min(0).max(0xff).optional(),
+  dataType: z.enum(['bool', 'i8', 'u8', 'i16', 'u16', 'i32', 'u32', 'i64', 'u64', 'f32', 'f64', 'string', 'bytes']).optional(),
+  access: z.enum(['ro', 'wo', 'rw', 'rwr', 'const']).optional(),
+  defaultValue: z.union([z.number(), z.string(), z.boolean(), z.null()]).optional(),
+  description: z.string().optional(),
+  pdoMap: z.enum(['tpdo', 'rpdo']).optional(),
+})
+
 const CanopenBusConfigSchema = z.object({
   name: z.string(),
   enabled: z.boolean().optional(),
@@ -829,6 +840,7 @@ const CanopenBusConfigSchema = z.object({
   tripleSampling: z.boolean().optional(),
   heartbeatMs: z.number().int().min(0).max(60000).optional(),
   syncPeriodMs: z.number().int().min(0).max(60000).optional(),
+  odEntries: z.array(CanopenOdEntrySchema).optional(),
   tpdo: z.array(CanopenPdoSchema).optional(),
   rpdo: z.array(CanopenPdoSchema).optional(),
 })
