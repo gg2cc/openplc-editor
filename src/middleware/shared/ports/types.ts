@@ -450,17 +450,52 @@ export interface CanConfig {
   txFrames?: CanTxFrame[]
 }
 
+export interface CanopenCommunicationBinding {
+  direction?: 'input' | 'output'
+  iecAddress?: string
+  iecType?: string
+}
+
 export interface CanopenPdoMapping {
   index: number
   subIndex?: number
   bitLength?: number
   name?: string
+  plcAddress?: string
+  direction?: 'input' | 'output'
+  binding?: CanopenCommunicationBinding
 }
 
 export interface CanopenPdo {
   index: number
   subIndex?: number
   mapping?: CanopenPdoMapping[]
+}
+
+export interface CanopenSdoEntry {
+  name?: string
+  index: number
+  subIndex?: number
+  dataType?:
+    | 'bool'
+    | 'i8'
+    | 'u8'
+    | 'i16'
+    | 'u16'
+    | 'i32'
+    | 'u32'
+    | 'i64'
+    | 'u64'
+    | 'f32'
+    | 'f64'
+    | 'string'
+    | 'bytes'
+  access?: 'ro' | 'wo' | 'rw' | 'rwr' | 'const'
+  defaultValue?: number | string | boolean | null
+  description?: string
+  plcAddress?: string
+  direction?: 'input' | 'output'
+  binding?: CanopenCommunicationBinding
 }
 
 export interface CanopenOdEntry {
@@ -484,7 +519,6 @@ export interface CanopenOdEntry {
   access?: 'ro' | 'wo' | 'rw' | 'rwr' | 'const'
   defaultValue?: number | string | boolean | null
   description?: string
-  pdoMap?: 'tpdo' | 'rpdo'
 }
 
 export interface CanopenBusConfig {
@@ -502,6 +536,7 @@ export interface CanopenBusConfig {
   odEntries?: CanopenOdEntry[]
   tpdo?: CanopenPdo[]
   rpdo?: CanopenPdo[]
+  sdo?: CanopenSdoEntry[]
 }
 
 export interface CanopenConfig {

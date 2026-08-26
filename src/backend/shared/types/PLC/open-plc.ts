@@ -804,17 +804,39 @@ const CanConfigSchema = z.object({
 })
 export type CanConfig = z.infer<typeof CanConfigSchema>
 
+const CanopenCommunicationBindingSchema = z.object({
+  direction: z.enum(['input', 'output']).optional(),
+  iecAddress: z.string().optional(),
+  iecType: z.string().optional(),
+})
+
 const CanopenPdoMappingSchema = z.object({
   index: z.number().int().min(0).max(0xffff),
   subIndex: z.number().int().min(0).max(0xff).optional(),
   bitLength: z.number().int().min(1).max(64).optional(),
   name: z.string().optional(),
+  plcAddress: z.string().optional(),
+  direction: z.enum(['input', 'output']).optional(),
+  binding: CanopenCommunicationBindingSchema.optional(),
 })
 
 const CanopenPdoSchema = z.object({
   index: z.number().int().min(0).max(0xffff),
   subIndex: z.number().int().min(0).max(0xff).optional(),
   mapping: z.array(CanopenPdoMappingSchema).optional(),
+})
+
+const CanopenSdoEntrySchema = z.object({
+  name: z.string().optional(),
+  index: z.number().int().min(0).max(0xffff),
+  subIndex: z.number().int().min(0).max(0xff).optional(),
+  dataType: z.enum(['bool', 'i8', 'u8', 'i16', 'u16', 'i32', 'u32', 'i64', 'u64', 'f32', 'f64', 'string', 'bytes']).optional(),
+  access: z.enum(['ro', 'wo', 'rw', 'rwr', 'const']).optional(),
+  defaultValue: z.union([z.number(), z.string(), z.boolean(), z.null()]).optional(),
+  description: z.string().optional(),
+  plcAddress: z.string().optional(),
+  direction: z.enum(['input', 'output']).optional(),
+  binding: CanopenCommunicationBindingSchema.optional(),
 })
 
 const CanopenOdEntrySchema = z.object({
@@ -825,7 +847,6 @@ const CanopenOdEntrySchema = z.object({
   access: z.enum(['ro', 'wo', 'rw', 'rwr', 'const']).optional(),
   defaultValue: z.union([z.number(), z.string(), z.boolean(), z.null()]).optional(),
   description: z.string().optional(),
-  pdoMap: z.enum(['tpdo', 'rpdo']).optional(),
 })
 
 const CanopenBusConfigSchema = z.object({
@@ -843,6 +864,7 @@ const CanopenBusConfigSchema = z.object({
   odEntries: z.array(CanopenOdEntrySchema).optional(),
   tpdo: z.array(CanopenPdoSchema).optional(),
   rpdo: z.array(CanopenPdoSchema).optional(),
+  sdo: z.array(CanopenSdoEntrySchema).optional(),
 })
 
 const CanopenConfigSchema = z.object({

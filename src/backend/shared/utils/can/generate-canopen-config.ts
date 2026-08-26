@@ -35,7 +35,6 @@ export function generateCanopenConfig(remoteDevices: PLCRemoteDevice[] | undefin
         access: entry.access ?? 'rw',
         default_value: entry.defaultValue ?? 0,
         description: entry.description ?? '',
-        pdo_map: entry.pdoMap ?? null,
       })),
       tpdo: (bus.tpdo ?? []).map((pdo) => ({
         index: pdo.index,
@@ -45,6 +44,12 @@ export function generateCanopenConfig(remoteDevices: PLCRemoteDevice[] | undefin
           sub_index: entry.subIndex ?? 0,
           bit_length: entry.bitLength ?? 8,
           name: entry.name ?? '',
+          plc_address: entry.plcAddress ?? entry.binding?.iecAddress ?? null,
+          direction: entry.direction ?? entry.binding?.direction ?? null,
+          binding: entry.binding ?? (entry.plcAddress || entry.direction ? {
+            direction: entry.direction ?? 'output',
+            iec_address: entry.plcAddress ?? '',
+          } : null),
         })),
       })),
       rpdo: (bus.rpdo ?? []).map((pdo) => ({
@@ -55,7 +60,28 @@ export function generateCanopenConfig(remoteDevices: PLCRemoteDevice[] | undefin
           sub_index: entry.subIndex ?? 0,
           bit_length: entry.bitLength ?? 8,
           name: entry.name ?? '',
+          plc_address: entry.plcAddress ?? entry.binding?.iecAddress ?? null,
+          direction: entry.direction ?? entry.binding?.direction ?? null,
+          binding: entry.binding ?? (entry.plcAddress || entry.direction ? {
+            direction: entry.direction ?? 'output',
+            iec_address: entry.plcAddress ?? '',
+          } : null),
         })),
+      })),
+      sdo: (bus.sdo ?? []).map((entry) => ({
+        name: entry.name ?? '',
+        index: entry.index,
+        sub_index: entry.subIndex ?? 0,
+        data_type: entry.dataType ?? 'u32',
+        access: entry.access ?? 'rw',
+        default_value: entry.defaultValue ?? 0,
+        description: entry.description ?? '',
+        plc_address: entry.plcAddress ?? entry.binding?.iecAddress ?? null,
+        direction: entry.direction ?? entry.binding?.direction ?? null,
+        binding: entry.binding ?? (entry.plcAddress || entry.direction ? {
+          direction: entry.direction ?? 'output',
+          iec_address: entry.plcAddress ?? '',
+        } : null),
       })),
     }))
   })

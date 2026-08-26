@@ -96,7 +96,7 @@ describe('generateCanConfig', () => {
     expect(output).toContain('"tx_frames"')
   })
 
-  it('creates a CANopen multi-bus config for up to 8 buses and includes OD entries', () => {
+  it('creates a CANopen multi-bus config for up to 8 buses and keeps OD metadata separate from PLC binding', () => {
     const remoteDevices: PLCRemoteDevice[] = [
       {
         name: 'canopen-bus-0',
@@ -124,7 +124,33 @@ describe('generateCanConfig', () => {
                   defaultValue: 0,
                 },
               ],
-              tpdo: [{ index: 0x1800, subIndex: 0, mapping: [{ index: 0x2000, subIndex: 0, bitLength: 16 }] }],
+              tpdo: [
+                {
+                  index: 0x1800,
+                  subIndex: 0,
+                  mapping: [
+                    {
+                      index: 0x2000,
+                      subIndex: 0,
+                      bitLength: 16,
+                      name: 'deviceType',
+                      plcAddress: '%QW0',
+                      direction: 'output',
+                    },
+                  ],
+                },
+              ],
+              sdo: [
+                {
+                  name: 'deviceTypeSdo',
+                  index: 0x2000,
+                  subIndex: 0,
+                  dataType: 'u32',
+                  access: 'rw',
+                  plcAddress: '%IW0',
+                  direction: 'input',
+                },
+              ],
             },
           ],
         },
@@ -163,5 +189,87 @@ describe('generateCanConfig', () => {
     expect(output).toContain('"index": 4096')
     expect(output).toContain('"data_type": "u32"')
     expect(output).toContain('"access": "ro"')
+    expect(output).toContain('"mapping"')
+    expect(output).toContain('"plc_address": "%QW0"')
+    expect(output).toContain('"direction": "output"')
+    expect(output).toContain('"sdo"')
+    expect(output).toContain('"plc_address": "%IW0"')
+    expect(output).toContain('"direction": "input"')
+  })
+
+  it('generates JSON with 3 SDO entries and 2 PDO groups and bound PLC addresses', () => {
+    const remoteDevices: PLCRemoteDevice[] = [
+      {
+        name: 'canopen-demo',
+        protocol: 'canopen',
+        canopenConfig: {
+          buses: [
+            {
+              name: 'bus0',
+              enabled: true,
+              interface: 'can0',
+              nodeId: 3,
+              bitrate: 500000,
+              heartbeatMs: 1000,
+              tpdo: [
+                {
+                  index: 0x1800,
+                  subIndex: 0,
+                  mapping: [
+                    { index: 0x2000, subIndex: 0, bitLength: 16, name: 'out_a', plcAddress: '%QW0', direction: 'output' },
+                    { index: 0x2001, subIndex: 0, bitLength: 32, name: 'out_b', plcAddress: '%QD1', direction: 'output' },
+                  ],
+                },
+                {
+                  index: 0x1801,
+                  subIndex: 0,
+                  mapping: [
+                    { index: 0x2002, subIndex: 0, bitLength: 8, name: 'out_c', plcAddress: '%QB2', direction: 'output' },
+                  ],
+                },
+              ],
+              rpdo: [
+                {
+                  index: 0x1400,
+                  subIndex: 0,
+                  mapping: [
+                    { index: 0x2100, subIndex: 0, bitLength: 16, name: 'in_a', plcAddress: '%IW10', direction: 'input' },
+                  ],
+                },
+              ],
+              sdo: [
+                { name: 'sdo_1', index: 0x2000, subIndex: 0, dataType: 'u16', access: 'rw', plcAddress: '%IW0', direction: 'input' },
+                { name: 'sdo_2', index: 0x2001, subIndex: 0, dataType: 'u32', access: 'rw', plcAddress: '%ID1', direction: 'input' },
+                { name: 'sdo_3', index: 0x2002, subIndex: 0, dataType: 'u8', access: 'rw', plcAddress: '%IB2', direction: 'output' },
+              ],
+            },
+          ],
+        },
+      },
+    ]
+
+    const output = generateCanopenConfig(remoteDevices)
+    expect(output).not.toBeNull()
+
+    const json = JSON.parse(output as string)
+    expect(json.buses).toHaveLength(1)
+    expect(json.buses[0].sdo).toHaveLength(3)
+    expect(json.buses[0].tpdo).toHaveLength(2)
+    expect(json.buses[0].rpdo).toHaveLength(1)
+
+    expect(json.buses[0].sdo.map((item: { name: string }) => item.name)).toEqual(['sdo_1', 'sdo_2', 'sdo_3'])
+    expect(json.buses[0].tpdo[0].mapping[0].plc_address).toBe('%QW0')
+    expect(json.buses[0].tpdo[1].mapping[0].plc_address).toBe('%QB2')
+    expect(json.buses[0].rpdo[0].mapping[0].plc_address).toBe('%IW10')
+    expect(json.buses[0].sdo[0].plc_address).toBe('%IW0')
+    expect(json.buses[0].sdo[1].plc_address).toBe('%ID1')
+    expect(json.buses[0].sdo[2].plc_address).toBe('%IB2')
+
+    expect(output).toContain('"plc_address": "%QW0"')
+    expect(output).toContain('"plc_address": "%QB2"')
+    expect(output).toContain('"plc_address": "%IW10"')
+    expect(output).toContain('"plc_address": "%IW0"')
+    expect(output).toContain('"plc_address": "%ID1"')
+    expect(output).toContain('"plc_address": "%IB2"')
   })
 })
