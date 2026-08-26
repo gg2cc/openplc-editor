@@ -272,4 +272,83 @@ describe('generateCanConfig', () => {
     expect(output).toContain('"plc_address": "%ID1"')
     expect(output).toContain('"plc_address": "%IB2"')
   })
+
+  it('matches a multi-bus CANopen profile with OD entries and bus metadata from the editor form', () => {
+    const remoteDevices: PLCRemoteDevice[] = [
+      {
+        name: 'canopen-test',
+        protocol: 'canopen',
+        canopenConfig: {
+          buses: [
+            {
+              name: 'bus0',
+              enabled: true,
+              interface: 'can0',
+              nodeId: 1,
+              bitrate: 500000,
+              sjw: 1,
+              samplePoint: 0.875,
+              restartMs: 100,
+              tripleSampling: false,
+              heartbeatMs: 1000,
+              syncPeriodMs: 1000,
+              odEntries: [
+                { name: 'entry_1', index: 0x1000, subIndex: 0, dataType: 'u32', access: 'ro', defaultValue: 1 },
+                { name: 'entry_2', index: 0x1001, subIndex: 0, dataType: 'u32', access: 'rw', defaultValue: 2 },
+              ],
+              tpdo: [
+                {
+                  index: 0x1800,
+                  subIndex: 0,
+                  mapping: [
+                    { index: 0x2000, subIndex: 0, bitLength: 16, name: 'out_word', plcAddress: '%QW0', direction: 'output' },
+                  ],
+                },
+              ],
+              rpdo: [
+                {
+                  index: 0x1400,
+                  subIndex: 0,
+                  mapping: [
+                    { index: 0x2100, subIndex: 0, bitLength: 16, name: 'in_word', plcAddress: '%IW0', direction: 'input' },
+                  ],
+                },
+              ],
+              sdo: [
+                { name: 'param_1', index: 0x2000, subIndex: 0, dataType: 'u32', access: 'rw', plcAddress: '%ID10', direction: 'input' },
+              ],
+            },
+          ],
+        },
+      },
+    ]
+
+    const output = generateCanopenConfig(remoteDevices)
+    expect(output).not.toBeNull()
+
+    const json = JSON.parse(output as string)
+    expect(json.buses).toHaveLength(1)
+    expect(json.buses[0].name).toBe('bus0')
+    expect(json.buses[0].interface).toBe('can0')
+    expect(json.buses[0].node_id).toBe(1)
+    expect(json.buses[0].bitrate).toBe(500000)
+    expect(json.buses[0].sjw).toBe(1)
+    expect(json.buses[0].sample_point).toBe(0.875)
+    expect(json.buses[0].restart_ms).toBe(100)
+    expect(json.buses[0].triple_sampling).toBe(false)
+    expect(json.buses[0].heartbeat_ms).toBe(1000)
+    expect(json.buses[0].sync_period_ms).toBe(1000)
+    expect(json.buses[0].od_entries).toHaveLength(2)
+    expect(json.buses[0].od_entries[0].name).toBe('entry_1')
+    expect(json.buses[0].od_entries[0].index).toBe(4096)
+    expect(json.buses[0].tpdo[0].mapping[0].plc_address).toBe('%QW0')
+    expect(json.buses[0].rpdo[0].mapping[0].plc_address).toBe('%IW0')
+    expect(json.buses[0].sdo[0].plc_address).toBe('%ID10')
+    expect(output).toContain('"can0"')
+    expect(output).toContain('"bus0"')
+    expect(output).toContain('"entry_1"')
+    expect(output).toContain('"%QW0"')
+    expect(output).toContain('"%IW0"')
+    expect(output).toContain('"%ID10"')
+  })
 })

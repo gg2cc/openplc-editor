@@ -82,9 +82,7 @@ export interface ComposeRuntimeV4BundleInput {
     modbusMaster: string | null
     /** From `generateS7CommConfig(servers)`. */
     s7Comm: string | null
-    /** From `generateOpcUaConfig(servers, generated_debug.cpp, instances)`.
-     *  Caller catches `OpcUaConfigError` and surfaces it before
-     *  calling the composer — passing `null` skips the file. */
+    /** From `generateOpcUaConfig(servers, generated_debug.cpp, instances)`. */
     opcUa: string | null
     /** From `generateEthercatConfig(remoteDevices)`.  Caller should
      *  run `validateEthercatConfig` first and abort the compile (not
@@ -92,13 +90,11 @@ export interface ComposeRuntimeV4BundleInput {
     ethercat: string
     /** From `generateCanConfig(remoteDevices)`. */
     can?: string | null
+    /** From `generateCanopenConfig(remoteDevices)`. */
+    canopen?: string | null
   }
 }
 
-/**
- * Build the file map.  Output keys are paths relative to the zip
- * root (which is what the runtime extracts into `core/generated/`).
- */
 export function composeRuntimeV4Bundle(input: ComposeRuntimeV4BundleInput): Record<string, string> {
   const files: Record<string, string> = {}
 
@@ -145,6 +141,7 @@ export function composeRuntimeV4Bundle(input: ComposeRuntimeV4BundleInput): Reco
   if (input.confs.s7Comm) files['conf/s7comm.json'] = input.confs.s7Comm
   if (input.confs.opcUa) files['conf/opcua.json'] = input.confs.opcUa
   if (input.confs.can) files['conf/can.json'] = input.confs.can
+  if (input.confs.canopen) files['conf/canopen.json'] = input.confs.canopen
   files['conf/ethercat.json'] = input.confs.ethercat
 
   return files

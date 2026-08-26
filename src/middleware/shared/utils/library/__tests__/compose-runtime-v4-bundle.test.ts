@@ -25,6 +25,8 @@ function baseInput(overrides: Partial<ComposeRuntimeV4BundleInput> = {}): Compos
       s7Comm: null,
       opcUa: null,
       ethercat: '{"masters":[]}',
+      can: null,
+      canopen: null,
     },
     ...overrides,
   }
@@ -96,6 +98,8 @@ describe('composeRuntimeV4Bundle', () => {
           s7Comm: '{"servers":[]}',
           opcUa: '{"endpoints":[]}',
           ethercat: '{"masters":[]}',
+          can: '{"interfaces":[]}',
+          canopen: '{"buses":[]}',
         },
       }),
     )
@@ -104,6 +108,28 @@ describe('composeRuntimeV4Bundle', () => {
     expect(files['conf/s7comm.json']).toBe('{"servers":[]}')
     expect(files['conf/opcua.json']).toBe('{"endpoints":[]}')
     expect(files['conf/ethercat.json']).toBe('{"masters":[]}')
+    expect(files['conf/can.json']).toBe('{"interfaces":[]}')
+    expect(files['conf/canopen.json']).toBe('{"buses":[]}')
+  })
+
+  it('includes canopen.json in the real runtime bundle when CANopen is enabled', () => {
+    const files = composeRuntimeV4Bundle(
+      baseInput({
+        confs: {
+          modbusSlave: null,
+          modbusMaster: null,
+          s7Comm: null,
+          opcUa: null,
+          ethercat: '{"masters":[]}',
+          can: null,
+          canopen: '{"buses":[{"name":"bus0","interface":"can0","node_id":1}]}',
+        },
+      }),
+    )
+
+    expect('conf/canopen.json' in files).toBe(true)
+    expect(files['conf/canopen.json']).toContain('"buses"')
+    expect(files['conf/canopen.json']).toContain('"node_id":1')
   })
 
   it('produces the file set runtime compile.sh check_required_files asserts', () => {

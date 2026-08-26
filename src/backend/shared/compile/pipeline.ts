@@ -557,6 +557,7 @@ async function runCompilePipelineInner(
         // null here means "no EtherCAT devices" → composer skips.
         ethercat: confs.ethercat ?? '',
         can: confs.can,
+        canopen: confs.canopen,
       },
     })
     emit({
