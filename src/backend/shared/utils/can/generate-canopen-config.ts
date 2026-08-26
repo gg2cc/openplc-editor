@@ -46,10 +46,6 @@ export function generateCanopenConfig(remoteDevices: PLCRemoteDevice[] | undefin
           name: entry.name ?? '',
           plc_address: entry.plcAddress ?? entry.binding?.iecAddress ?? null,
           direction: entry.direction ?? entry.binding?.direction ?? null,
-          binding: entry.binding ?? (entry.plcAddress || entry.direction ? {
-            direction: entry.direction ?? 'output',
-            iec_address: entry.plcAddress ?? '',
-          } : null),
         })),
       })),
       rpdo: (bus.rpdo ?? []).map((pdo) => ({
@@ -62,10 +58,6 @@ export function generateCanopenConfig(remoteDevices: PLCRemoteDevice[] | undefin
           name: entry.name ?? '',
           plc_address: entry.plcAddress ?? entry.binding?.iecAddress ?? null,
           direction: entry.direction ?? entry.binding?.direction ?? null,
-          binding: entry.binding ?? (entry.plcAddress || entry.direction ? {
-            direction: entry.direction ?? 'output',
-            iec_address: entry.plcAddress ?? '',
-          } : null),
         })),
       })),
       sdo: (bus.sdo ?? []).map((entry) => ({
@@ -78,10 +70,6 @@ export function generateCanopenConfig(remoteDevices: PLCRemoteDevice[] | undefin
         description: entry.description ?? '',
         plc_address: entry.plcAddress ?? entry.binding?.iecAddress ?? null,
         direction: entry.direction ?? entry.binding?.direction ?? null,
-        binding: entry.binding ?? (entry.plcAddress || entry.direction ? {
-          direction: entry.direction ?? 'output',
-          iec_address: entry.plcAddress ?? '',
-        } : null),
       })),
     }))
   })

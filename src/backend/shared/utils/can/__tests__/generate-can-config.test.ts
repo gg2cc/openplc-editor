@@ -264,6 +264,8 @@ describe('generateCanConfig', () => {
     expect(json.buses[0].sdo[0].plc_address).toBe('%IW0')
     expect(json.buses[0].sdo[1].plc_address).toBe('%ID1')
     expect(json.buses[0].sdo[2].plc_address).toBe('%IB2')
+    expect(json.buses[0].sdo[0]).not.toHaveProperty('binding')
+    expect(json.buses[0].tpdo[0].mapping[0]).not.toHaveProperty('binding')
 
     expect(output).toContain('"plc_address": "%QW0"')
     expect(output).toContain('"plc_address": "%QB2"')
@@ -271,6 +273,7 @@ describe('generateCanConfig', () => {
     expect(output).toContain('"plc_address": "%IW0"')
     expect(output).toContain('"plc_address": "%ID1"')
     expect(output).toContain('"plc_address": "%IB2"')
+    expect(output).not.toContain('"binding"')
   })
 
   it('matches a multi-bus CANopen profile with OD entries and bus metadata from the editor form', () => {
