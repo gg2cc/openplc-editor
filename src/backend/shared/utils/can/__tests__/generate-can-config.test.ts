@@ -1,8 +1,56 @@
 import type { PLCRemoteDevice } from '../../../types/PLC/open-plc'
+import {
+  getNextCanopenBusNumber,
+  makeCanopenOdEntry,
+  makeCanopenPdo,
+  makeCanopenPdoMapping,
+  makeCanopenSdoEntry,
+} from '../../../../../frontend/components/_features/[workspace]/editor/device/canopen/canopen-utils'
 import { generateCanConfig } from '../generate-can-config'
 import { generateCanopenConfig } from '../generate-canopen-config'
 
 describe('generateCanConfig', () => {
+  it('auto-increments CANopen bus, OD, PDO, and SDO numbering from the highest existing values', () => {
+    expect(
+      getNextCanopenBusNumber([
+        { name: 'bus2', interface: 'can2', bitrate: 500000, enabled: true, localNodeId: 127, slaves: [] },
+        { name: 'can5', interface: 'can5', bitrate: 500000, enabled: true, localNodeId: 127, slaves: [] },
+      ]),
+    ).toBe(6)
+
+    const firstOd = makeCanopenOdEntry()
+    expect(firstOd.index).toBe(0x1000)
+    expect(firstOd.subIndex).toBe(0)
+    expect(firstOd.defaultValue).toBe(0)
+
+    const odEntry = makeCanopenOdEntry([{ index: 0x1000 }, { index: 0x1300 }])
+    expect(odEntry.index).toBe(0x1310)
+
+    const firstTpdo = makeCanopenPdo('output')
+    expect(firstTpdo.index).toBe(0x1800)
+    expect(firstTpdo.subIndex).toBe(0)
+
+    const pdo = makeCanopenPdo('output', [{ index: 0x1800 }, { index: 0x1a00 }])
+    expect(pdo.index).toBe(0x1a10)
+
+    const firstMapping = makeCanopenPdoMapping('output')
+    expect(firstMapping.index).toBe(0x2000)
+    expect(firstMapping.subIndex).toBe(0)
+
+    const mapping = makeCanopenPdoMapping('output', [{ index: 0x2000, plcAddress: '%QW0' }, { index: 0x3200, plcAddress: '%QW10' }])
+    expect(mapping.index).toBe(0x3210)
+    expect(mapping.plcAddress).toBe('%QW11')
+
+    const firstSdo = makeCanopenSdoEntry('output')
+    expect(firstSdo.index).toBe(0x2000)
+    expect(firstSdo.subIndex).toBe(0)
+    expect(firstSdo.defaultValue).toBe(0)
+
+    const sdo = makeCanopenSdoEntry('output', [{ index: 0x4000, plcAddress: '%QW0' }, { index: 0x4400, plcAddress: '%QW44' }])
+    expect(sdo.index).toBe(0x4410)
+    expect(sdo.plcAddress).toBe('%QW45')
+  })
+
   it('returns null when no CAN remote device is configured', () => {
     const remoteDevices: PLCRemoteDevice[] = [
       {
@@ -96,6 +144,110 @@ describe('generateCanConfig', () => {
     expect(output).toContain('"tx_frames"')
   })
 
+  it('emits a bus-master-slave CANopen structure with explicit slave node ids', () => {
+    const remoteDevices: PLCRemoteDevice[] = [
+      {
+        name: 'canopen-bus-0',
+        protocol: 'canopen',
+        canopenConfig: {
+          buses: [
+            {
+              name: 'bus0',
+              enabled: true,
+              interface: 'can0',
+              localNodeId: 127,
+              bitrate: 500000,
+              heartbeatMs: 1000,
+              slaves: [
+                {
+                  name: 'servo-1',
+                  nodeId: 3,
+                  enabled: true,
+                  tpdo: [
+                    {
+                      name: 'tpdo_1',
+                      index: 0x1800,
+                      subIndex: 0,
+                      mapping: [
+                        { index: 0x2000, subIndex: 0, bitLength: 16, name: 'out_a', plcAddress: '%QW0', direction: 'output' },
+                      ],
+                    },
+                  ],
+                  rpdo: [
+                    {
+                      name: 'rpdo_1',
+                      index: 0x1400,
+                      subIndex: 0,
+                      mapping: [
+                        { index: 0x2100, subIndex: 0, bitLength: 16, name: 'in_a', plcAddress: '%IW0', direction: 'input' },
+                      ],
+                    },
+                  ],
+                  sdo: [
+                    { name: 'param_1', index: 0x2000, subIndex: 0, dataType: 'u16', access: 'rw', plcAddress: '%QW1', direction: 'output' },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ]
+
+    const output = generateCanopenConfig(remoteDevices)
+    expect(output).not.toBeNull()
+
+    const json = JSON.parse(output as string)
+    expect(json.buses).toHaveLength(1)
+    expect(json.buses[0].local_node_id).toBe(127)
+    expect(json.buses[0].slaves).toHaveLength(1)
+    expect(json.buses[0].slaves[0].node_id).toBe(3)
+    expect(json.buses[0].slaves[0].tpdo[0].name).toBe('tpdo_1')
+    expect(json.buses[0].slaves[0].tpdo[0].mapping[0].plc_address).toBe('%QW0')
+    expect(json.buses[0].slaves[0].rpdo[0].name).toBe('rpdo_1')
+    expect(json.buses[0].slaves[0].rpdo[0].mapping[0].plc_address).toBe('%IW0')
+    expect(json.buses[0].slaves[0].sdo[0].plc_address).toBe('%QW1')
+  })
+
+  it('keeps local master node and remote slave node ids separate and never defaults slave to 127', () => {
+    const remoteDevices: PLCRemoteDevice[] = [
+      {
+        name: 'canopen-master-only',
+        protocol: 'canopen',
+        canopenConfig: {
+          buses: [
+            {
+              name: 'bus0',
+              enabled: true,
+              interface: 'can0',
+              localNodeId: 127,
+              bitrate: 500000,
+              heartbeatMs: 1000,
+              slaves: [
+                {
+                  name: 'servo-1',
+                  enabled: true,
+                  nodeId: 3,
+                  tpdo: [],
+                  rpdo: [],
+                  sdo: [],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ]
+
+    const output = generateCanopenConfig(remoteDevices)
+    expect(output).not.toBeNull()
+
+    const json = JSON.parse(output as string)
+    expect(json.buses[0].local_node_id).toBe(127)
+    expect(json.buses[0].slaves[0].node_id).toBe(3)
+    expect(json.buses[0].slaves[0].node_id).not.toBe(127)
+  })
+
   it('creates a CANopen multi-bus config for up to 8 buses and keeps OD metadata separate from PLC binding', () => {
     const remoteDevices: PLCRemoteDevice[] = [
       {
@@ -107,48 +259,55 @@ describe('generateCanConfig', () => {
               name: 'bus0',
               enabled: true,
               interface: 'can0',
-              nodeId: 1,
+              localNodeId: 1,
               bitrate: 500000,
               sjw: 1,
               samplePoint: 0.875,
               restartMs: 100,
               tripleSampling: false,
               heartbeatMs: 1000,
-              odEntries: [
+              slaves: [
                 {
-                  name: 'deviceType',
-                  index: 0x1000,
-                  subIndex: 0,
-                  dataType: 'u32',
-                  access: 'ro',
-                  defaultValue: 0,
-                },
-              ],
-              tpdo: [
-                {
-                  index: 0x1800,
-                  subIndex: 0,
-                  mapping: [
+                  name: 'slave_1',
+                  enabled: true,
+                  nodeId: 1,
+                  odEntries: [
                     {
-                      index: 0x2000,
-                      subIndex: 0,
-                      bitLength: 16,
                       name: 'deviceType',
-                      plcAddress: '%QW0',
-                      direction: 'output',
+                      index: 0x1000,
+                      subIndex: 0,
+                      dataType: 'u32',
+                      access: 'ro',
+                      defaultValue: 0,
                     },
                   ],
-                },
-              ],
-              sdo: [
-                {
-                  name: 'deviceTypeSdo',
-                  index: 0x2000,
-                  subIndex: 0,
-                  dataType: 'u32',
-                  access: 'rw',
-                  plcAddress: '%IW0',
-                  direction: 'input',
+                  tpdo: [
+                    {
+                      index: 0x1800,
+                      subIndex: 0,
+                      mapping: [
+                        {
+                          index: 0x2000,
+                          subIndex: 0,
+                          bitLength: 16,
+                          name: 'deviceType',
+                          plcAddress: '%QW0',
+                          direction: 'output',
+                        },
+                      ],
+                    },
+                  ],
+                  sdo: [
+                    {
+                      name: 'deviceTypeSdo',
+                      index: 0x2000,
+                      subIndex: 0,
+                      dataType: 'u32',
+                      access: 'rw',
+                      plcAddress: '%IW0',
+                      direction: 'input',
+                    },
+                  ],
                 },
               ],
             },
@@ -164,7 +323,7 @@ describe('generateCanConfig', () => {
               name: 'bus1',
               enabled: true,
               interface: 'can1',
-              nodeId: 2,
+              localNodeId: 2,
               bitrate: 250000,
               heartbeatMs: 2000,
             },
@@ -179,8 +338,8 @@ describe('generateCanConfig', () => {
     expect(output).toContain('"buses"')
     expect(output).toContain('"interface": "can0"')
     expect(output).toContain('"interface": "can1"')
-    expect(output).toContain('"node_id": 1')
-    expect(output).toContain('"node_id": 2')
+    expect(output).toContain('"local_node_id": 1')
+    expect(output).toContain('"local_node_id": 2')
     expect(output).toContain('"sjw": 1')
     expect(output).toContain('"sample_point": 0.875')
     expect(output).toContain('"restart_ms": 100')
@@ -208,39 +367,46 @@ describe('generateCanConfig', () => {
               name: 'bus0',
               enabled: true,
               interface: 'can0',
-              nodeId: 3,
+              localNodeId: 3,
               bitrate: 500000,
               heartbeatMs: 1000,
-              tpdo: [
+              slaves: [
                 {
-                  index: 0x1800,
-                  subIndex: 0,
-                  mapping: [
-                    { index: 0x2000, subIndex: 0, bitLength: 16, name: 'out_a', plcAddress: '%QW0', direction: 'output' },
-                    { index: 0x2001, subIndex: 0, bitLength: 32, name: 'out_b', plcAddress: '%QD1', direction: 'output' },
+                  name: 'slave_1',
+                  enabled: true,
+                  nodeId: 3,
+                  tpdo: [
+                    {
+                      index: 0x1800,
+                      subIndex: 0,
+                      mapping: [
+                        { index: 0x2000, subIndex: 0, bitLength: 16, name: 'out_a', plcAddress: '%QW0', direction: 'output' },
+                        { index: 0x2001, subIndex: 0, bitLength: 32, name: 'out_b', plcAddress: '%QD1', direction: 'output' },
+                      ],
+                    },
+                    {
+                      index: 0x1801,
+                      subIndex: 0,
+                      mapping: [
+                        { index: 0x2002, subIndex: 0, bitLength: 8, name: 'out_c', plcAddress: '%QB2', direction: 'output' },
+                      ],
+                    },
+                  ],
+                  rpdo: [
+                    {
+                      index: 0x1400,
+                      subIndex: 0,
+                      mapping: [
+                        { index: 0x2100, subIndex: 0, bitLength: 16, name: 'in_a', plcAddress: '%IW10', direction: 'input' },
+                      ],
+                    },
+                  ],
+                  sdo: [
+                    { name: 'sdo_1', index: 0x2000, subIndex: 0, dataType: 'u16', access: 'rw', plcAddress: '%IW0', direction: 'input' },
+                    { name: 'sdo_2', index: 0x2001, subIndex: 0, dataType: 'u32', access: 'rw', plcAddress: '%ID1', direction: 'input' },
+                    { name: 'sdo_3', index: 0x2002, subIndex: 0, dataType: 'u8', access: 'rw', plcAddress: '%IB2', direction: 'output' },
                   ],
                 },
-                {
-                  index: 0x1801,
-                  subIndex: 0,
-                  mapping: [
-                    { index: 0x2002, subIndex: 0, bitLength: 8, name: 'out_c', plcAddress: '%QB2', direction: 'output' },
-                  ],
-                },
-              ],
-              rpdo: [
-                {
-                  index: 0x1400,
-                  subIndex: 0,
-                  mapping: [
-                    { index: 0x2100, subIndex: 0, bitLength: 16, name: 'in_a', plcAddress: '%IW10', direction: 'input' },
-                  ],
-                },
-              ],
-              sdo: [
-                { name: 'sdo_1', index: 0x2000, subIndex: 0, dataType: 'u16', access: 'rw', plcAddress: '%IW0', direction: 'input' },
-                { name: 'sdo_2', index: 0x2001, subIndex: 0, dataType: 'u32', access: 'rw', plcAddress: '%ID1', direction: 'input' },
-                { name: 'sdo_3', index: 0x2002, subIndex: 0, dataType: 'u8', access: 'rw', plcAddress: '%IB2', direction: 'output' },
               ],
             },
           ],
@@ -253,19 +419,20 @@ describe('generateCanConfig', () => {
 
     const json = JSON.parse(output as string)
     expect(json.buses).toHaveLength(1)
-    expect(json.buses[0].sdo).toHaveLength(3)
-    expect(json.buses[0].tpdo).toHaveLength(2)
-    expect(json.buses[0].rpdo).toHaveLength(1)
+    expect(json.buses[0].slaves).toHaveLength(1)
+    expect(json.buses[0].slaves[0].sdo).toHaveLength(3)
+    expect(json.buses[0].slaves[0].tpdo).toHaveLength(2)
+    expect(json.buses[0].slaves[0].rpdo).toHaveLength(1)
 
-    expect(json.buses[0].sdo.map((item: { name: string }) => item.name)).toEqual(['sdo_1', 'sdo_2', 'sdo_3'])
-    expect(json.buses[0].tpdo[0].mapping[0].plc_address).toBe('%QW0')
-    expect(json.buses[0].tpdo[1].mapping[0].plc_address).toBe('%QB2')
-    expect(json.buses[0].rpdo[0].mapping[0].plc_address).toBe('%IW10')
-    expect(json.buses[0].sdo[0].plc_address).toBe('%IW0')
-    expect(json.buses[0].sdo[1].plc_address).toBe('%ID1')
-    expect(json.buses[0].sdo[2].plc_address).toBe('%IB2')
-    expect(json.buses[0].sdo[0]).not.toHaveProperty('binding')
-    expect(json.buses[0].tpdo[0].mapping[0]).not.toHaveProperty('binding')
+    expect(json.buses[0].slaves[0].sdo.map((item: { name: string }) => item.name)).toEqual(['sdo_1', 'sdo_2', 'sdo_3'])
+    expect(json.buses[0].slaves[0].tpdo[0].mapping[0].plc_address).toBe('%QW0')
+    expect(json.buses[0].slaves[0].tpdo[1].mapping[0].plc_address).toBe('%QB2')
+    expect(json.buses[0].slaves[0].rpdo[0].mapping[0].plc_address).toBe('%IW10')
+    expect(json.buses[0].slaves[0].sdo[0].plc_address).toBe('%IW0')
+    expect(json.buses[0].slaves[0].sdo[1].plc_address).toBe('%ID1')
+    expect(json.buses[0].slaves[0].sdo[2].plc_address).toBe('%IB2')
+    expect(json.buses[0].slaves[0].sdo[0]).not.toHaveProperty('binding')
+    expect(json.buses[0].slaves[0].tpdo[0].mapping[0]).not.toHaveProperty('binding')
 
     expect(output).toContain('"plc_address": "%QW0"')
     expect(output).toContain('"plc_address": "%QB2"')
@@ -287,7 +454,7 @@ describe('generateCanConfig', () => {
               name: 'bus0',
               enabled: true,
               interface: 'can0',
-              nodeId: 1,
+              localNodeId: 1,
               bitrate: 500000,
               sjw: 1,
               samplePoint: 0.875,
@@ -295,30 +462,37 @@ describe('generateCanConfig', () => {
               tripleSampling: false,
               heartbeatMs: 1000,
               syncPeriodMs: 1000,
-              odEntries: [
-                { name: 'entry_1', index: 0x1000, subIndex: 0, dataType: 'u32', access: 'ro', defaultValue: 1 },
-                { name: 'entry_2', index: 0x1001, subIndex: 0, dataType: 'u32', access: 'rw', defaultValue: 2 },
-              ],
-              tpdo: [
+              slaves: [
                 {
-                  index: 0x1800,
-                  subIndex: 0,
-                  mapping: [
-                    { index: 0x2000, subIndex: 0, bitLength: 16, name: 'out_word', plcAddress: '%QW0', direction: 'output' },
+                  name: 'slave_1',
+                  enabled: true,
+                  nodeId: 1,
+                  odEntries: [
+                    { name: 'entry_1', index: 0x1000, subIndex: 0, dataType: 'u32', access: 'ro', defaultValue: 1 },
+                    { name: 'entry_2', index: 0x1001, subIndex: 0, dataType: 'u32', access: 'rw', defaultValue: 2 },
+                  ],
+                  tpdo: [
+                    {
+                      index: 0x1800,
+                      subIndex: 0,
+                      mapping: [
+                        { index: 0x2000, subIndex: 0, bitLength: 16, name: 'out_word', plcAddress: '%QW0', direction: 'output' },
+                      ],
+                    },
+                  ],
+                  rpdo: [
+                    {
+                      index: 0x1400,
+                      subIndex: 0,
+                      mapping: [
+                        { index: 0x2100, subIndex: 0, bitLength: 16, name: 'in_word', plcAddress: '%IW0', direction: 'input' },
+                      ],
+                    },
+                  ],
+                  sdo: [
+                    { name: 'param_1', index: 0x2000, subIndex: 0, dataType: 'u32', access: 'rw', plcAddress: '%ID10', direction: 'input' },
                   ],
                 },
-              ],
-              rpdo: [
-                {
-                  index: 0x1400,
-                  subIndex: 0,
-                  mapping: [
-                    { index: 0x2100, subIndex: 0, bitLength: 16, name: 'in_word', plcAddress: '%IW0', direction: 'input' },
-                  ],
-                },
-              ],
-              sdo: [
-                { name: 'param_1', index: 0x2000, subIndex: 0, dataType: 'u32', access: 'rw', plcAddress: '%ID10', direction: 'input' },
               ],
             },
           ],
@@ -333,7 +507,7 @@ describe('generateCanConfig', () => {
     expect(json.buses).toHaveLength(1)
     expect(json.buses[0].name).toBe('bus0')
     expect(json.buses[0].interface).toBe('can0')
-    expect(json.buses[0].node_id).toBe(1)
+    expect(json.buses[0].local_node_id).toBe(1)
     expect(json.buses[0].bitrate).toBe(500000)
     expect(json.buses[0].sjw).toBe(1)
     expect(json.buses[0].sample_point).toBe(0.875)
@@ -341,12 +515,12 @@ describe('generateCanConfig', () => {
     expect(json.buses[0].triple_sampling).toBe(false)
     expect(json.buses[0].heartbeat_ms).toBe(1000)
     expect(json.buses[0].sync_period_ms).toBe(1000)
-    expect(json.buses[0].od_entries).toHaveLength(2)
-    expect(json.buses[0].od_entries[0].name).toBe('entry_1')
-    expect(json.buses[0].od_entries[0].index).toBe(4096)
-    expect(json.buses[0].tpdo[0].mapping[0].plc_address).toBe('%QW0')
-    expect(json.buses[0].rpdo[0].mapping[0].plc_address).toBe('%IW0')
-    expect(json.buses[0].sdo[0].plc_address).toBe('%ID10')
+    expect(json.buses[0].slaves[0].od_entries).toHaveLength(2)
+    expect(json.buses[0].slaves[0].od_entries[0].name).toBe('entry_1')
+    expect(json.buses[0].slaves[0].od_entries[0].index).toBe(4096)
+    expect(json.buses[0].slaves[0].tpdo[0].mapping[0].plc_address).toBe('%QW0')
+    expect(json.buses[0].slaves[0].rpdo[0].mapping[0].plc_address).toBe('%IW0')
+    expect(json.buses[0].slaves[0].sdo[0].plc_address).toBe('%ID10')
     expect(output).toContain('"can0"')
     expect(output).toContain('"bus0"')
     expect(output).toContain('"entry_1"')

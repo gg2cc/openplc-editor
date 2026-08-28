@@ -2452,6 +2452,14 @@ describe('createProjectSlice', () => {
       expect(store.getState().project.data.remoteDevices![0].modbusTcpConfig).toBeUndefined()
     })
 
+    it('creates a canopen device with default master node id 127', () => {
+      const result = store.getState().projectActions.createRemoteDevice({
+        data: { name: 'CanOpenDev', protocol: 'canopen' },
+      })
+      expect(result.ok).toBe(true)
+      expect(store.getState().project.data.remoteDevices![0].canopenConfig?.buses[0].nodeId).toBe(127)
+    })
+
     it('fails when device name already exists', () => {
       store.getState().projectActions.createRemoteDevice({ data: makeRemoteDevice('Dev1') })
       const result = store.getState().projectActions.createRemoteDevice({ data: makeRemoteDevice('Dev1') })

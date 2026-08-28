@@ -1667,9 +1667,20 @@ const createProjectSlice: StateCreator<ProjectSliceRoot, [], [], ProjectSlice> =
                   name: 'bus0',
                   enabled: true,
                   interface: 'can0',
-                  nodeId: 1,
+                  localNodeId: 127,
                   bitrate: 500000,
                   heartbeatMs: 1000,
+                  slaves: [
+                    {
+                      name: 'slave_1',
+                      enabled: true,
+                      nodeId: 1,
+                      odEntries: [],
+                      tpdo: [],
+                      rpdo: [],
+                      sdo: [],
+                    },
+                  ],
                 },
               ],
             }

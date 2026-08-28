@@ -467,6 +467,7 @@ export interface CanopenPdoMapping {
 }
 
 export interface CanopenPdo {
+  name?: string
   index: number
   subIndex?: number
   mapping?: CanopenPdoMapping[]
@@ -521,11 +522,21 @@ export interface CanopenOdEntry {
   description?: string
 }
 
+export interface CanopenSlaveConfig {
+  name: string
+  enabled?: boolean
+  nodeId: number
+  odEntries?: CanopenOdEntry[]
+  tpdo?: CanopenPdo[]
+  rpdo?: CanopenPdo[]
+  sdo?: CanopenSdoEntry[]
+}
+
 export interface CanopenBusConfig {
   name: string
   enabled?: boolean
   interface: string
-  nodeId: number
+  localNodeId?: number
   bitrate: number
   sjw?: number
   samplePoint?: number
@@ -533,10 +544,7 @@ export interface CanopenBusConfig {
   tripleSampling?: boolean
   heartbeatMs?: number
   syncPeriodMs?: number
-  odEntries?: CanopenOdEntry[]
-  tpdo?: CanopenPdo[]
-  rpdo?: CanopenPdo[]
-  sdo?: CanopenSdoEntry[]
+  slaves?: CanopenSlaveConfig[]
 }
 
 export interface CanopenConfig {

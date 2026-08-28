@@ -1,4 +1,4 @@
-import { TrashIcon } from '@radix-ui/react-icons'
+import * as Tabs from '@radix-ui/react-tabs'
 import type {
   CanopenBusConfig,
   CanopenConfig,
@@ -6,8 +6,9 @@ import type {
   CanopenPdo,
   CanopenPdoMapping,
   CanopenSdoEntry,
+  CanopenSlaveConfig,
 } from '@root/middleware/shared/ports/types'
-import { useCallback, useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 
 import { PlusIcon } from '../../../../../../assets/icons/interface/Plus'
 import { useOpenPLCStore } from '../../../../../../store'
@@ -15,6 +16,13 @@ import { InputWithRef } from '../../../../../_atoms/input'
 import { Label } from '../../../../../_atoms/label'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '../../../../../_atoms/select'
 import { ToggleSwitch } from '../../../../../_atoms/toggle-switch'
+import {
+  getNextCanopenBusNumber,
+  makeCanopenOdEntry,
+  makeCanopenPdo,
+  makeCanopenPdoMapping,
+  makeCanopenSdoEntry,
+} from './canopen-utils'
 
 const CANOPEN_BITRATE_OPTIONS = [
   { value: '100000', label: '100 kbps' },
@@ -36,48 +44,136 @@ const CAN_SELECT_ITEM_STYLES =
 const inputStyles =
   'h-[30px] w-full rounded-md border border-neutral-300 bg-white px-2 py-1 font-caption text-cp-sm font-medium text-neutral-850 outline-none focus:border-brand-medium-dark dark:border-neutral-850 dark:bg-neutral-950 dark:text-neutral-300'
 
-const defaultCanopenBus = (): CanopenBusConfig => ({
-  name: 'bus0',
+const defaultCanopenSlave = (): CanopenSlaveConfig => ({
+  name: 'slave_1',
   enabled: true,
-  interface: 'can0',
   nodeId: 1,
-  bitrate: 500000,
-  sjw: 1,
-  samplePoint: 0.875,
-  restartMs: 100,
-  tripleSampling: false,
-  heartbeatMs: 1000,
-  syncPeriodMs: 0,
   odEntries: [],
   tpdo: [],
   rpdo: [],
   sdo: [],
 })
 
+
+const defaultCanopenBus = (buses: CanopenBusConfig[] = []): CanopenBusConfig => {
+  const nextBusNumber = getNextCanopenBusNumber(buses)
+  return {
+    name: `bus${nextBusNumber}`,
+    enabled: true,
+    interface: `can${nextBusNumber}`,
+    localNodeId: 127,
+    bitrate: 500000,
+    sjw: 1,
+    samplePoint: 0.875,
+    restartMs: 100,
+    tripleSampling: false,
+    heartbeatMs: 1000,
+    syncPeriodMs: 0,
+    slaves: [defaultCanopenSlave()],
+  }
+}
+
 const defaultCanopenConfig = (): CanopenConfig => ({
   buses: [defaultCanopenBus()],
 })
 
-const updateCanopenBus = (buses: CanopenBusConfig[], index: number, updates: Partial<CanopenBusConfig>) => {
+const CANOPEN_DATA_TYPES = ['bool', 'u8', 'i8', 'u16', 'i16', 'u32', 'i32', 'u64', 'i64', 'f32', 'f64'] as const
+const CANOPEN_ACCESS_OPTIONS = ['ro', 'wo', 'rw', 'rwr', 'const'] as const
+const CANOPEN_DIRECTION_OPTIONS = ['input', 'output'] as const
+
+
+const updateCanopenBus = (buses: CanopenBusConfig[], index: number, updates: Partial<CanopenBusConfig>): CanopenBusConfig[] => {
   const next = [...buses]
   next[index] = { ...next[index], ...updates }
   return next
 }
 
-const updateCanopenPdoArray = (pdo: CanopenPdo[] | undefined, index: number, updates: Partial<CanopenPdo>) => {
-  const next = [...(pdo ?? [])]
-  next[index] = { ...(next[index] ?? { index: 0x1800 }), ...updates }
-  return next
+type CanopenSlaveArrayKey = 'odEntries' | 'tpdo' | 'rpdo' | 'sdo'
+
+type CanopenSlaveArrayMap = {
+  odEntries: CanopenOdEntry[]
+  tpdo: CanopenPdo[]
+  rpdo: CanopenPdo[]
+  sdo: CanopenSdoEntry[]
 }
 
-const updateCanopenMappingArray = (
-  mapping: CanopenPdoMapping[] | undefined,
-  index: number,
+const updateCanopenSlaveArray = <K extends CanopenSlaveArrayKey>(
+  buses: CanopenBusConfig[],
+  busIndex: number,
+  slaveIndex: number,
+  key: K,
+  updater: (items: CanopenSlaveArrayMap[K]) => CanopenSlaveArrayMap[K],
+): CanopenBusConfig[] => {
+  const nextBuses = [...buses]
+  const current = nextBuses[busIndex]?.slaves ?? []
+  const next = [...current]
+  const slave: CanopenSlaveConfig = { ...(next[slaveIndex] ?? defaultCanopenSlave()) }
+  const items = (slave[key] ?? []) as CanopenSlaveArrayMap[K]
+  const updatedItems = updater(items)
+
+  switch (key) {
+    case 'odEntries':
+      slave.odEntries = updatedItems as CanopenOdEntry[]
+      break
+    case 'tpdo':
+      slave.tpdo = updatedItems as CanopenPdo[]
+      break
+    case 'rpdo':
+      slave.rpdo = updatedItems as CanopenPdo[]
+      break
+    case 'sdo':
+      slave.sdo = updatedItems as CanopenSdoEntry[]
+      break
+  }
+
+  next[slaveIndex] = slave
+  nextBuses[busIndex] = { ...nextBuses[busIndex], slaves: next }
+  return nextBuses
+}
+
+const updateCanopenPdo = (
+  buses: CanopenBusConfig[],
+  busIndex: number,
+  slaveIndex: number,
+  pdoType: 'tpdo' | 'rpdo',
+  pdoIndex: number,
+  updates: Partial<CanopenPdo>,
+): CanopenBusConfig[] => {
+  const nextBuses = [...buses]
+  const current = nextBuses[busIndex]?.slaves ?? []
+  const next = [...current]
+  const slave: CanopenSlaveConfig = { ...(next[slaveIndex] ?? defaultCanopenSlave()) }
+  const pdos: CanopenPdo[] = [...(slave[pdoType] ?? [])]
+  const currentPdo = pdos[pdoIndex] ?? makeCanopenPdo(pdoType === 'rpdo' ? 'input' : 'output')
+  pdos[pdoIndex] = { ...currentPdo, ...updates }
+  slave[pdoType] = pdos
+  next[slaveIndex] = slave
+  nextBuses[busIndex] = { ...nextBuses[busIndex], slaves: next }
+  return nextBuses
+}
+
+const updateCanopenPdoMapping = (
+  buses: CanopenBusConfig[],
+  busIndex: number,
+  slaveIndex: number,
+  pdoType: 'tpdo' | 'rpdo',
+  pdoIndex: number,
+  mappingIndex: number,
   updates: Partial<CanopenPdoMapping>,
-) => {
-  const next = [...(mapping ?? [])]
-  next[index] = { ...(next[index] ?? { index: 0x2000, bitLength: 8 }), ...updates }
-  return next
+): CanopenBusConfig[] => {
+  const nextBuses = [...buses]
+  const current = nextBuses[busIndex]?.slaves ?? []
+  const next = [...current]
+  const slave: CanopenSlaveConfig = { ...(next[slaveIndex] ?? defaultCanopenSlave()) }
+  const pdos: CanopenPdo[] = [...(slave[pdoType] ?? [])]
+  const currentPdo = pdos[pdoIndex] ?? makeCanopenPdo(pdoType === 'rpdo' ? 'input' : 'output')
+  const mappings: CanopenPdoMapping[] = [...(currentPdo.mapping ?? [])]
+  mappings[mappingIndex] = { ...mappings[mappingIndex], ...updates }
+  pdos[pdoIndex] = { ...currentPdo, mapping: mappings }
+  slave[pdoType] = pdos
+  next[slaveIndex] = slave
+  nextBuses[busIndex] = { ...nextBuses[busIndex], slaves: next }
+  return nextBuses
 }
 
 const CanopenDeviceEditor = () => {
@@ -107,6 +203,9 @@ const CanopenDeviceEditor = () => {
     [deviceName, projectActions, handleFileAndWorkspaceSavedState],
   )
 
+  const [activeBusTab, setActiveBusTab] = useState('0')
+  const [activeSlaveTab, setActiveSlaveTab] = useState<Record<number, string>>({})
+
   const handleCanopenBusChange = useCallback(
     (busIndex: number, updates: Partial<CanopenBusConfig>) => {
       updateCanopenStore({ buses: updateCanopenBus(canopenConfig.buses, busIndex, updates) })
@@ -114,49 +213,39 @@ const CanopenDeviceEditor = () => {
     [canopenConfig, updateCanopenStore],
   )
 
-  const handleCanopenPdoChange = useCallback(
-    (busIndex: number, pdoType: 'tpdo' | 'rpdo', pdoIndex: number, updates: Partial<CanopenPdo>) => {
+  const handleCanopenSlaveChange = useCallback(
+    (busIndex: number, slaveIndex: number, updates: Partial<CanopenSlaveConfig>) => {
       const nextBuses = [...canopenConfig.buses]
-      const currentPdo = nextBuses[busIndex]?.[pdoType] ?? []
-      nextBuses[busIndex] = {
-        ...nextBuses[busIndex],
-        [pdoType]: updateCanopenPdoArray(currentPdo, pdoIndex, updates),
-      }
+      const current = nextBuses[busIndex]?.slaves ?? []
+      const next = [...current]
+      next[slaveIndex] = { ...(next[slaveIndex] ?? defaultCanopenSlave()), ...updates }
+      nextBuses[busIndex] = { ...nextBuses[busIndex], slaves: next }
       updateCanopenStore({ buses: nextBuses })
     },
     [canopenConfig, updateCanopenStore],
   )
 
-  const handleCanopenMappingChange = useCallback(
-    (
-      busIndex: number,
-      pdoType: 'tpdo' | 'rpdo',
-      pdoIndex: number,
-      mappingIndex: number,
-      updates: Partial<CanopenPdoMapping>,
-    ) => {
+  const handleAddCanopenSlave = useCallback(
+    (busIndex: number) => {
       const nextBuses = [...canopenConfig.buses]
-      const currentPdoList = [...(nextBuses[busIndex]?.[pdoType] ?? [])]
-      const currentPdo = currentPdoList[pdoIndex] ?? {
-        index: pdoType === 'tpdo' ? 0x1800 : 0x1400,
-        mapping: [],
-      }
+      const next = [...(nextBuses[busIndex]?.slaves ?? [])]
+      const nextNodeId = next.length > 0 ? Math.max(...next.map((slave) => slave.nodeId)) + 1 : 1
+      next.push({ ...defaultCanopenSlave(), name: `slave_${next.length + 1}`, nodeId: nextNodeId })
+      nextBuses[busIndex] = { ...nextBuses[busIndex], slaves: next }
+      setActiveSlaveTab((prev) => ({ ...prev, [busIndex]: String(next.length - 1) }))
+      updateCanopenStore({ buses: nextBuses })
+    },
+    [canopenConfig, updateCanopenStore],
+  )
 
-      const nextMappingList = [...(currentPdo.mapping ?? [])]
-      nextMappingList[mappingIndex] = {
-        ...(nextMappingList[mappingIndex] ?? { index: 0x2000, bitLength: 8 }),
-        ...updates,
-      }
-
-      currentPdoList[pdoIndex] = {
-        ...currentPdo,
-        mapping: nextMappingList,
-      }
-
-      nextBuses[busIndex] = {
-        ...nextBuses[busIndex],
-        [pdoType]: currentPdoList,
-      }
+  const handleRemoveCanopenSlave = useCallback(
+    (busIndex: number, slaveIndex: number) => {
+      const nextBuses = [...canopenConfig.buses]
+      const current = nextBuses[busIndex]?.slaves ?? []
+      if (current.length <= 1) return
+      const next = current.filter((_, i) => i !== slaveIndex)
+      nextBuses[busIndex] = { ...nextBuses[busIndex], slaves: next }
+      setActiveSlaveTab((prev) => ({ ...prev, [busIndex]: String(Math.max(0, Math.min(slaveIndex, next.length - 1))) }))
       updateCanopenStore({ buses: nextBuses })
     },
     [canopenConfig, updateCanopenStore],
@@ -164,275 +253,764 @@ const CanopenDeviceEditor = () => {
 
   const handleAddCanopenBus = () => {
     if (canopenConfig.buses.length >= 8) return
-    updateCanopenStore({ buses: [...canopenConfig.buses, defaultCanopenBus()] })
+    const nextBuses = [...canopenConfig.buses, defaultCanopenBus(canopenConfig.buses)]
+    setActiveBusTab(String(nextBuses.length - 1))
+    updateCanopenStore({ buses: nextBuses })
   }
 
   const handleRemoveCanopenBus = (index: number) => {
     if (canopenConfig.buses.length <= 1) return
-    updateCanopenStore({ buses: canopenConfig.buses.filter((_, i) => i !== index) })
-  }
-
-  const handleAddCanopenPdo = (busIndex: number, pdoType: 'tpdo' | 'rpdo') => {
-    const nextBuses = [...canopenConfig.buses]
-    const nextPdo = { index: pdoType === 'tpdo' ? 0x1800 : 0x1400, subIndex: 0, mapping: [] }
-    nextBuses[busIndex] = {
-      ...nextBuses[busIndex],
-      [pdoType]: [...(nextBuses[busIndex]?.[pdoType] ?? []), nextPdo],
-    }
+    const nextBuses = canopenConfig.buses.filter((_, i) => i !== index)
+    const nextTabIndex = Math.max(0, Math.min(index, nextBuses.length - 1))
+    setActiveBusTab(String(nextTabIndex))
     updateCanopenStore({ buses: nextBuses })
   }
 
-  const handleRemoveCanopenPdo = (busIndex: number, pdoType: 'tpdo' | 'rpdo', pdoIndex: number) => {
-    const nextBuses = [...canopenConfig.buses]
-    nextBuses[busIndex] = {
-      ...nextBuses[busIndex],
-      [pdoType]: (nextBuses[busIndex]?.[pdoType] ?? []).filter((_, i) => i !== pdoIndex),
-    }
-    updateCanopenStore({ buses: nextBuses })
+  const renderPdoSection = (busIndex: number, slaveIndex: number, pdoType: 'tpdo' | 'rpdo') => {
+    const slave = canopenConfig.buses[busIndex]?.slaves?.[slaveIndex]
+    const pdos: CanopenPdo[] = slave?.[pdoType] ?? []
+    const title = pdoType === 'tpdo' ? 'TPDO' : 'RPDO'
+
+    return (
+      <div className='rounded border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-900'>
+        <div className='mb-3 flex items-center justify-between'>
+          <h4 className='text-[11px] font-semibold uppercase tracking-[0.12em] text-neutral-700 dark:text-neutral-300'>
+            {title}
+          </h4>
+          <button
+            type='button'
+            onClick={() => {
+              const nextBuses = updateCanopenSlaveArray(
+                canopenConfig.buses,
+                busIndex,
+                slaveIndex,
+                pdoType,
+                (items) => [...items, makeCanopenPdo(pdoType === 'tpdo' ? 'output' : 'input', items)],
+              )
+              updateCanopenStore({ buses: nextBuses })
+            }}
+            className='rounded bg-brand px-2 py-1 text-[10px] font-medium text-white hover:bg-brand-medium-dark'
+          >
+            Add {title}
+          </button>
+        </div>
+
+        <div className='space-y-3'>
+          {pdos.length === 0 && (
+            <div className='rounded border border-dashed border-neutral-300 p-2 text-[11px] text-neutral-500 dark:border-neutral-700 dark:text-neutral-400'>
+              No {title} configured for this slave.
+            </div>
+          )}
+
+          {pdos.map((pdo, pdoIndex) => (
+            <div key={`${pdoType}-${pdoIndex}`} className='rounded border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-950'>
+              <div className='mb-2 flex items-center justify-between gap-2'>
+                <span className='text-[11px] font-medium text-neutral-700 dark:text-neutral-300'>
+                  {title} #{pdoIndex + 1}
+                </span>
+                <button
+                  type='button'
+                  onClick={() => {
+                    const nextBuses = updateCanopenSlaveArray(
+                      canopenConfig.buses,
+                      busIndex,
+                      slaveIndex,
+                      pdoType,
+                      (items) => items.filter((_, index) => index !== pdoIndex),
+                    )
+                    updateCanopenStore({ buses: nextBuses })
+                  }}
+                  className='text-[10px] font-medium text-red-500 hover:text-red-600'
+                >
+                  Delete
+                </button>
+              </div>
+
+              <div className='grid grid-cols-2 gap-2 md:grid-cols-4'>
+                <div className='flex flex-col gap-1'>
+                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Index</Label>
+                  <InputWithRef
+                    type='number'
+                    value={pdo.index ?? 0}
+                    onChange={(e) => {
+                      const nextBuses = updateCanopenPdo(
+                        canopenConfig.buses,
+                        busIndex,
+                        slaveIndex,
+                        pdoType,
+                        pdoIndex,
+                        {
+                          index: Number(e.target.value) || 0,
+                        },
+                      )
+                      updateCanopenStore({ buses: nextBuses })
+                    }}
+                    className={inputStyles}
+                  />
+                </div>
+                <div className='flex flex-col gap-1'>
+                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>SubIndex</Label>
+                  <InputWithRef
+                    type='number'
+                    value={pdo.subIndex ?? 0}
+                    onChange={(e) => {
+                      const nextBuses = updateCanopenPdo(
+                        canopenConfig.buses,
+                        busIndex,
+                        slaveIndex,
+                        pdoType,
+                        pdoIndex,
+                        {
+                          subIndex: Number(e.target.value) || 0,
+                        },
+                      )
+                      updateCanopenStore({ buses: nextBuses })
+                    }}
+                    className={inputStyles}
+                  />
+                </div>
+                <div className='flex flex-col gap-1'>
+                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Name</Label>
+                  <InputWithRef
+                    value={pdo.name ?? ''}
+                    onChange={(e) => {
+                      const nextBuses = updateCanopenPdo(
+                        canopenConfig.buses,
+                        busIndex,
+                        slaveIndex,
+                        pdoType,
+                        pdoIndex,
+                        {
+                          name: e.target.value,
+                        },
+                      )
+                      updateCanopenStore({ buses: nextBuses })
+                    }}
+                    className={inputStyles}
+                  />
+                </div>
+              </div>
+
+              <div className='mt-3 space-y-2'>
+                <div className='flex items-center justify-between'>
+                  <span className='text-[10px] font-semibold uppercase tracking-[0.12em] text-neutral-600 dark:text-neutral-400'>
+                    Mappings
+                  </span>
+                  <button
+                    type='button'
+                    onClick={() => {
+                      const nextBuses = updateCanopenPdo(
+                        canopenConfig.buses,
+                        busIndex,
+                        slaveIndex,
+                        pdoType,
+                        pdoIndex,
+                        {
+                          mapping: [...(pdo.mapping ?? []), makeCanopenPdoMapping(pdoType === 'tpdo' ? 'output' : 'input', pdo.mapping ?? [])],
+                        },
+                      )
+                      updateCanopenStore({ buses: nextBuses })
+                    }}
+                    className='rounded bg-neutral-800 px-2 py-1 text-[10px] font-medium text-white hover:bg-neutral-700 dark:bg-neutral-700 dark:hover:bg-neutral-600'
+                  >
+                    Add Mapping
+                  </button>
+                </div>
+
+                {(pdo.mapping ?? []).length === 0 && (
+                  <div className='rounded border border-dashed border-neutral-300 p-2 text-[11px] text-neutral-500 dark:border-neutral-700 dark:text-neutral-400'>
+                    No mapping entries.
+                  </div>
+                )}
+
+                {(pdo.mapping ?? []).map((mapping, mappingIndex) => (
+                  <div key={`${title}-mapping-${mappingIndex}`} className='rounded border border-neutral-200 bg-neutral-50 p-2 dark:border-neutral-800 dark:bg-neutral-950'>
+                    <div className='mb-2 flex items-center justify-between'>
+                      <span className='text-[10px] font-medium text-neutral-700 dark:text-neutral-300'>
+                        Mapping #{mappingIndex + 1}
+                      </span>
+                      <button
+                        type='button'
+                        onClick={() => {
+                          const nextBuses = updateCanopenPdo(
+                            canopenConfig.buses,
+                            busIndex,
+                            slaveIndex,
+                            pdoType,
+                            pdoIndex,
+                            {
+                              mapping: (pdo.mapping ?? []).filter((_, index) => index !== mappingIndex),
+                            },
+                          )
+                          updateCanopenStore({ buses: nextBuses })
+                        }}
+                        className='text-[10px] font-medium text-red-500 hover:text-red-600'
+                      >
+                        Remove
+                      </button>
+                    </div>
+
+                    <div className='grid grid-cols-2 gap-2 md:grid-cols-3'>
+                      <div className='flex flex-col gap-1'>
+                        <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Name</Label>
+                        <InputWithRef
+                          value={mapping.name ?? ''}
+                          onChange={(e) => {
+                            const nextBuses = updateCanopenPdoMapping(
+                              canopenConfig.buses,
+                              busIndex,
+                              slaveIndex,
+                              pdoType,
+                              pdoIndex,
+                              mappingIndex,
+                              {
+                                name: e.target.value,
+                              },
+                            )
+                            updateCanopenStore({ buses: nextBuses })
+                          }}
+                          className={inputStyles}
+                        />
+                      </div>
+                      <div className='flex flex-col gap-1'>
+                        <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Index</Label>
+                        <InputWithRef
+                          type='number'
+                          value={mapping.index ?? 0}
+                          onChange={(e) => {
+                            const nextBuses = updateCanopenPdoMapping(
+                              canopenConfig.buses,
+                              busIndex,
+                              slaveIndex,
+                              pdoType,
+                              pdoIndex,
+                              mappingIndex,
+                              {
+                                index: Number(e.target.value) || 0,
+                              },
+                            )
+                            updateCanopenStore({ buses: nextBuses })
+                          }}
+                          className={inputStyles}
+                        />
+                      </div>
+                      <div className='flex flex-col gap-1'>
+                        <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>SubIndex</Label>
+                        <InputWithRef
+                          type='number'
+                          value={mapping.subIndex ?? 0}
+                          onChange={(e) => {
+                            const nextBuses = updateCanopenPdoMapping(
+                              canopenConfig.buses,
+                              busIndex,
+                              slaveIndex,
+                              pdoType,
+                              pdoIndex,
+                              mappingIndex,
+                              {
+                                subIndex: Number(e.target.value) || 0,
+                              },
+                            )
+                            updateCanopenStore({ buses: nextBuses })
+                          }}
+                          className={inputStyles}
+                        />
+                      </div>
+                      <div className='flex flex-col gap-1'>
+                        <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Bit Length</Label>
+                        <InputWithRef
+                          type='number'
+                          value={mapping.bitLength ?? 8}
+                          onChange={(e) => {
+                            const nextBuses = updateCanopenPdoMapping(
+                              canopenConfig.buses,
+                              busIndex,
+                              slaveIndex,
+                              pdoType,
+                              pdoIndex,
+                              mappingIndex,
+                              {
+                                bitLength: Number(e.target.value) || 8,
+                              },
+                            )
+                            updateCanopenStore({ buses: nextBuses })
+                          }}
+                          className={inputStyles}
+                        />
+                      </div>
+                      <div className='flex flex-col gap-1'>
+                        <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>PLC Addr</Label>
+                        <InputWithRef
+                          value={mapping.plcAddress ?? ''}
+                          onChange={(e) => {
+                            const nextBuses = updateCanopenPdoMapping(
+                              canopenConfig.buses,
+                              busIndex,
+                              slaveIndex,
+                              pdoType,
+                              pdoIndex,
+                              mappingIndex,
+                              {
+                                plcAddress: e.target.value,
+                              },
+                            )
+                            updateCanopenStore({ buses: nextBuses })
+                          }}
+                          className={inputStyles}
+                        />
+                      </div>
+                      <div className='flex flex-col gap-1'>
+                        <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Direction</Label>
+                        <Select
+                          value={mapping.direction ?? (pdoType === 'tpdo' ? 'output' : 'input')}
+                          onValueChange={(value) => {
+                            const nextBuses = updateCanopenPdoMapping(
+                              canopenConfig.buses,
+                              busIndex,
+                              slaveIndex,
+                              pdoType,
+                              pdoIndex,
+                              mappingIndex,
+                              {
+                                direction: value as 'input' | 'output',
+                              },
+                            )
+                            updateCanopenStore({ buses: nextBuses })
+                          }}
+                        >
+                          <SelectTrigger withIndicator className={CAN_SELECT_TRIGGER_STYLES} />
+                          <SelectContent className={CAN_SELECT_CONTENT_STYLES}>
+                            {CANOPEN_DIRECTION_OPTIONS.map((option) => (
+                              <SelectItem key={option} value={option} className={CAN_SELECT_ITEM_STYLES}>
+                                {option}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    )
   }
 
-  const handleAddCanopenMapping = (busIndex: number, pdoType: 'tpdo' | 'rpdo', pdoIndex: number) => {
-    const nextBuses = [...canopenConfig.buses]
-    const pdo = nextBuses[busIndex]?.[pdoType]?.[pdoIndex] ?? { index: 0x1800, mapping: [] }
-    const nextMapping: CanopenPdoMapping = {
-      index: 0x2000 + (pdo.mapping?.length ?? 0),
-      bitLength: 8,
-      name: `map_${(pdo.mapping?.length ?? 0) + 1}`,
-      plcAddress: '',
-      direction: 'output',
-    }
-    const nextPdo: CanopenPdo = {
-      ...pdo,
-      mapping: [...(pdo.mapping ?? []), nextMapping],
-    }
-    const nextPdoList = [...(nextBuses[busIndex]?.[pdoType] ?? [])]
-    nextPdoList[pdoIndex] = nextPdo
-    nextBuses[busIndex] = { ...nextBuses[busIndex], [pdoType]: nextPdoList }
-    updateCanopenStore({ buses: nextBuses })
+  const renderSdoSection = (busIndex: number, slaveIndex: number) => {
+    const slave = canopenConfig.buses[busIndex]?.slaves?.[slaveIndex]
+    const sdos: CanopenSdoEntry[] = slave?.sdo ?? []
+
+    return (
+      <div className='rounded border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-900'>
+        <div className='mb-3 flex items-center justify-between'>
+          <h4 className='text-[11px] font-semibold uppercase tracking-[0.12em] text-neutral-700 dark:text-neutral-300'>
+            SDO
+          </h4>
+          <button
+            type='button'
+            onClick={() => {
+              const nextBuses = updateCanopenSlaveArray(
+                canopenConfig.buses,
+                busIndex,
+                slaveIndex,
+                'sdo',
+                (items) => [...items, makeCanopenSdoEntry('input', items)],
+              )
+              updateCanopenStore({ buses: nextBuses })
+            }}
+            className='rounded bg-brand px-2 py-1 text-[10px] font-medium text-white hover:bg-brand-medium-dark'
+          >
+            Add SDO
+          </button>
+        </div>
+
+        <div className='space-y-3'>
+          {sdos.length === 0 && (
+            <div className='rounded border border-dashed border-neutral-300 p-2 text-[11px] text-neutral-500 dark:border-neutral-700 dark:text-neutral-400'>
+              No SDO entries configured for this slave.
+            </div>
+          )}
+
+          {sdos.map((entry, index) => (
+            <div key={`sdo-${index}`} className='rounded border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-950'>
+              <div className='mb-2 flex items-center justify-between'>
+                <span className='text-[11px] font-medium text-neutral-700 dark:text-neutral-300'>SDO #{index + 1}</span>
+                <button
+                  type='button'
+                  onClick={() => {
+                    const nextBuses = updateCanopenSlaveArray(
+                      canopenConfig.buses,
+                      busIndex,
+                      slaveIndex,
+                      'sdo',
+                      (items) => items.filter((_, i) => i !== index),
+                    )
+                    updateCanopenStore({ buses: nextBuses })
+                  }}
+                  className='text-[10px] font-medium text-red-500 hover:text-red-600'
+                >
+                  Delete
+                </button>
+              </div>
+
+              <div className='grid grid-cols-2 gap-2 md:grid-cols-3'>
+                <div className='flex flex-col gap-1'>
+                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Name</Label>
+                  <InputWithRef
+                    value={entry.name ?? ''}
+                    onChange={(e) => {
+                      const nextBuses = updateCanopenSlaveArray(
+                        canopenConfig.buses,
+                        busIndex,
+                        slaveIndex,
+                        'sdo',
+                        (items) => items.map((item, i) => (i === index ? { ...item, name: e.target.value } : item)),
+                      )
+                      updateCanopenStore({ buses: nextBuses })
+                    }}
+                    className={inputStyles}
+                  />
+                </div>
+                <div className='flex flex-col gap-1'>
+                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Index</Label>
+                  <InputWithRef
+                    type='number'
+                    value={entry.index ?? 0}
+                    onChange={(e) => {
+                      const nextBuses = updateCanopenSlaveArray(
+                        canopenConfig.buses,
+                        busIndex,
+                        slaveIndex,
+                        'sdo',
+                        (items) => items.map((item, i) => (i === index ? { ...item, index: Number(e.target.value) || 0 } : item)),
+                      )
+                      updateCanopenStore({ buses: nextBuses })
+                    }}
+                    className={inputStyles}
+                  />
+                </div>
+                <div className='flex flex-col gap-1'>
+                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>SubIndex</Label>
+                  <InputWithRef
+                    type='number'
+                    value={entry.subIndex ?? 0}
+                    onChange={(e) => {
+                      const nextBuses = updateCanopenSlaveArray(
+                        canopenConfig.buses,
+                        busIndex,
+                        slaveIndex,
+                        'sdo',
+                        (items) => items.map((item, i) => (i === index ? { ...item, subIndex: Number(e.target.value) || 0 } : item)),
+                      )
+                      updateCanopenStore({ buses: nextBuses })
+                    }}
+                    className={inputStyles}
+                  />
+                </div>
+                <div className='flex flex-col gap-1'>
+                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Type</Label>
+                  <Select
+                    value={entry.dataType ?? 'u32'}
+                    onValueChange={(value) => {
+                      const nextBuses = updateCanopenSlaveArray(
+                        canopenConfig.buses,
+                        busIndex,
+                        slaveIndex,
+                        'sdo',
+                        (items) =>
+                          items.map((item, i) =>
+                            i === index ? { ...item, dataType: value as CanopenSdoEntry['dataType'] } : item,
+                          ),
+                      )
+                      updateCanopenStore({ buses: nextBuses })
+                    }}
+                  >
+                    <SelectTrigger withIndicator className={CAN_SELECT_TRIGGER_STYLES} />
+                    <SelectContent className={CAN_SELECT_CONTENT_STYLES}>
+                      {CANOPEN_DATA_TYPES.map((option) => (
+                        <SelectItem key={option} value={option} className={CAN_SELECT_ITEM_STYLES}>
+                          {option}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className='flex flex-col gap-1'>
+                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Access</Label>
+                  <Select
+                    value={entry.access ?? 'rw'}
+                    onValueChange={(value) => {
+                      const nextBuses = updateCanopenSlaveArray(
+                        canopenConfig.buses,
+                        busIndex,
+                        slaveIndex,
+                        'sdo',
+                        (items) =>
+                          items.map((item, i) =>
+                            i === index ? { ...item, access: value as CanopenSdoEntry['access'] } : item,
+                          ),
+                      )
+                      updateCanopenStore({ buses: nextBuses })
+                    }}
+                  >
+                    <SelectTrigger withIndicator className={CAN_SELECT_TRIGGER_STYLES} />
+                    <SelectContent className={CAN_SELECT_CONTENT_STYLES}>
+                      {CANOPEN_ACCESS_OPTIONS.map((option) => (
+                        <SelectItem key={option} value={option} className={CAN_SELECT_ITEM_STYLES}>
+                          {option}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className='flex flex-col gap-1'>
+                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>PLC Addr</Label>
+                  <InputWithRef
+                    value={entry.plcAddress ?? ''}
+                    onChange={(e) => {
+                      const nextBuses = updateCanopenSlaveArray(
+                        canopenConfig.buses,
+                        busIndex,
+                        slaveIndex,
+                        'sdo',
+                        (items) => items.map((item, i) => (i === index ? { ...item, plcAddress: e.target.value } : item)),
+                      )
+                      updateCanopenStore({ buses: nextBuses })
+                    }}
+                    className={inputStyles}
+                  />
+                </div>
+                <div className='flex flex-col gap-1'>
+                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Direction</Label>
+                  <Select
+                    value={entry.direction ?? 'input'}
+                    onValueChange={(value) => {
+                      const nextBuses = updateCanopenSlaveArray(
+                        canopenConfig.buses,
+                        busIndex,
+                        slaveIndex,
+                        'sdo',
+                        (items) =>
+                          items.map((item, i) =>
+                            i === index ? { ...item, direction: value as 'input' | 'output' } : item,
+                          ),
+                      )
+                      updateCanopenStore({ buses: nextBuses })
+                    }}
+                  >
+                    <SelectTrigger withIndicator className={CAN_SELECT_TRIGGER_STYLES} />
+                    <SelectContent className={CAN_SELECT_CONTENT_STYLES}>
+                      {CANOPEN_DIRECTION_OPTIONS.map((option) => (
+                        <SelectItem key={option} value={option} className={CAN_SELECT_ITEM_STYLES}>
+                          {option}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    )
   }
 
-  const handleCanopenSdoChange = useCallback(
-    (busIndex: number, sdoIndex: number, updates: Partial<CanopenSdoEntry>) => {
-      const nextBuses = [...canopenConfig.buses]
-      const current = nextBuses[busIndex]?.sdo ?? []
-      const next = [...current]
-      const baseEntry: CanopenSdoEntry = {
-        ...(next[sdoIndex] ?? {}),
-        index: next[sdoIndex]?.index ?? 0x2000,
-        subIndex: next[sdoIndex]?.subIndex ?? 0,
-        dataType: next[sdoIndex]?.dataType ?? 'u32',
-        access: next[sdoIndex]?.access ?? 'rw',
-      }
-      next[sdoIndex] = { ...baseEntry, ...updates }
-      nextBuses[busIndex] = { ...nextBuses[busIndex], sdo: next }
-      updateCanopenStore({ buses: nextBuses })
-    },
-    [canopenConfig, updateCanopenStore],
-  )
+  const renderOdSection = (busIndex: number, slaveIndex: number) => {
+    const slave = canopenConfig.buses[busIndex]?.slaves?.[slaveIndex]
+    const entries: CanopenOdEntry[] = slave?.odEntries ?? []
 
-  const handleAddCanopenSdo = useCallback(
-    (busIndex: number) => {
-      const nextBuses = [...canopenConfig.buses]
-      const next = [...(nextBuses[busIndex]?.sdo ?? [])]
-      next.push({
-        name: `sdo_${next.length + 1}`,
-        index: 0x2000 + next.length,
-        subIndex: 0,
-        dataType: 'u32',
-        access: 'rw',
-        defaultValue: 0,
-        plcAddress: '',
-        direction: 'output',
-      })
-      nextBuses[busIndex] = { ...nextBuses[busIndex], sdo: next }
-      updateCanopenStore({ buses: nextBuses })
-    },
-    [canopenConfig, updateCanopenStore],
-  )
+    return (
+      <div className='rounded border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-900'>
+        <div className='mb-3 flex items-center justify-between'>
+          <h4 className='text-[11px] font-semibold uppercase tracking-[0.12em] text-neutral-700 dark:text-neutral-300'>
+            Object Dictionary
+          </h4>
+          <button
+            type='button'
+            onClick={() => {
+              const nextBuses = updateCanopenSlaveArray(
+                canopenConfig.buses,
+                busIndex,
+                slaveIndex,
+                'odEntries',
+                (items) => [...items, makeCanopenOdEntry(items)],
+              )
+              updateCanopenStore({ buses: nextBuses })
+            }}
+            className='rounded bg-brand px-2 py-1 text-[10px] font-medium text-white hover:bg-brand-medium-dark'
+          >
+            Add OD Entry
+          </button>
+        </div>
 
-  const handleRemoveCanopenSdo = useCallback(
-    (busIndex: number, sdoIndex: number) => {
-      const nextBuses = [...canopenConfig.buses]
-      nextBuses[busIndex] = {
-        ...nextBuses[busIndex],
-        sdo: (nextBuses[busIndex]?.sdo ?? []).filter((_, i) => i !== sdoIndex),
-      }
-      updateCanopenStore({ buses: nextBuses })
-    },
-    [canopenConfig, updateCanopenStore],
-  )
+        <div className='space-y-3'>
+          {entries.length === 0 && (
+            <div className='rounded border border-dashed border-neutral-300 p-2 text-[11px] text-neutral-500 dark:border-neutral-700 dark:text-neutral-400'>
+              No OD entries configured.
+            </div>
+          )}
 
-  const handleRemoveCanopenMapping = (
-    busIndex: number,
-    pdoType: 'tpdo' | 'rpdo',
-    pdoIndex: number,
-    mappingIndex: number,
-  ) => {
-    const nextBuses = [...canopenConfig.buses]
-    const pdo = nextBuses[busIndex]?.[pdoType]?.[pdoIndex]
-    if (!pdo) return
-    const nextPdo = {
-      ...pdo,
-      mapping: (pdo.mapping ?? []).filter((_, i) => i !== mappingIndex),
-    }
-    const nextPdoList = [...(nextBuses[busIndex]?.[pdoType] ?? [])]
-    nextPdoList[pdoIndex] = nextPdo
-    nextBuses[busIndex] = { ...nextBuses[busIndex], [pdoType]: nextPdoList }
-    updateCanopenStore({ buses: nextBuses })
+          {entries.map((entry, index) => (
+            <div key={`od-${index}`} className='rounded border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-950'>
+              <div className='mb-2 flex items-center justify-between'>
+                <span className='text-[11px] font-medium text-neutral-700 dark:text-neutral-300'>OD #{index + 1}</span>
+                <button
+                  type='button'
+                  onClick={() => {
+                    const nextBuses = updateCanopenSlaveArray(
+                      canopenConfig.buses,
+                      busIndex,
+                      slaveIndex,
+                      'odEntries',
+                      (items) => items.filter((_, i) => i !== index),
+                    )
+                    updateCanopenStore({ buses: nextBuses })
+                  }}
+                  className='text-[10px] font-medium text-red-500 hover:text-red-600'
+                >
+                  Delete
+                </button>
+              </div>
+
+              <div className='grid grid-cols-2 gap-2 md:grid-cols-3'>
+                <div className='flex flex-col gap-1'>
+                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Name</Label>
+                  <InputWithRef
+                    value={entry.name ?? ''}
+                    onChange={(e) => {
+                      const nextBuses = updateCanopenSlaveArray(
+                        canopenConfig.buses,
+                        busIndex,
+                        slaveIndex,
+                        'odEntries',
+                        (items) => items.map((item, i) => (i === index ? { ...item, name: e.target.value } : item)),
+                      )
+                      updateCanopenStore({ buses: nextBuses })
+                    }}
+                    className={inputStyles}
+                  />
+                </div>
+                <div className='flex flex-col gap-1'>
+                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Index</Label>
+                  <InputWithRef
+                    type='number'
+                    value={entry.index ?? 0}
+                    onChange={(e) => {
+                      const nextBuses = updateCanopenSlaveArray(
+                        canopenConfig.buses,
+                        busIndex,
+                        slaveIndex,
+                        'odEntries',
+                        (items) => items.map((item, i) => (i === index ? { ...item, index: Number(e.target.value) || 0 } : item)),
+                      )
+                      updateCanopenStore({ buses: nextBuses })
+                    }}
+                    className={inputStyles}
+                  />
+                </div>
+                <div className='flex flex-col gap-1'>
+                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>SubIndex</Label>
+                  <InputWithRef
+                    type='number'
+                    value={entry.subIndex ?? 0}
+                    onChange={(e) => {
+                      const nextBuses = updateCanopenSlaveArray(
+                        canopenConfig.buses,
+                        busIndex,
+                        slaveIndex,
+                        'odEntries',
+                        (items) => items.map((item, i) => (i === index ? { ...item, subIndex: Number(e.target.value) || 0 } : item)),
+                      )
+                      updateCanopenStore({ buses: nextBuses })
+                    }}
+                    className={inputStyles}
+                  />
+                </div>
+                <div className='flex flex-col gap-1'>
+                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Type</Label>
+                  <Select
+                    value={entry.dataType ?? 'u32'}
+                    onValueChange={(value) => {
+                      const nextBuses = updateCanopenSlaveArray(
+                        canopenConfig.buses,
+                        busIndex,
+                        slaveIndex,
+                        'odEntries',
+                        (items) =>
+                          items.map((item, i) =>
+                            i === index ? { ...item, dataType: value as CanopenOdEntry['dataType'] } : item,
+                          ),
+                      )
+                      updateCanopenStore({ buses: nextBuses })
+                    }}
+                  >
+                    <SelectTrigger withIndicator className={CAN_SELECT_TRIGGER_STYLES} />
+                    <SelectContent className={CAN_SELECT_CONTENT_STYLES}>
+                      {CANOPEN_DATA_TYPES.map((option) => (
+                        <SelectItem key={option} value={option} className={CAN_SELECT_ITEM_STYLES}>
+                          {option}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className='flex flex-col gap-1'>
+                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Access</Label>
+                  <Select
+                    value={entry.access ?? 'rw'}
+                    onValueChange={(value) => {
+                      const nextBuses = updateCanopenSlaveArray(
+                        canopenConfig.buses,
+                        busIndex,
+                        slaveIndex,
+                        'odEntries',
+                        (items) =>
+                          items.map((item, i) =>
+                            i === index ? { ...item, access: value as CanopenOdEntry['access'] } : item,
+                          ),
+                      )
+                      updateCanopenStore({ buses: nextBuses })
+                    }}
+                  >
+                    <SelectTrigger withIndicator className={CAN_SELECT_TRIGGER_STYLES} />
+                    <SelectContent className={CAN_SELECT_CONTENT_STYLES}>
+                      {CANOPEN_ACCESS_OPTIONS.map((option) => (
+                        <SelectItem key={option} value={option} className={CAN_SELECT_ITEM_STYLES}>
+                          {option}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className='flex flex-col gap-1'>
+                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Default</Label>
+                  <InputWithRef
+                    type='number'
+                    value={String(entry.defaultValue ?? 0)}
+                    onChange={(e) => {
+                      const nextBuses = updateCanopenSlaveArray(
+                        canopenConfig.buses,
+                        busIndex,
+                        slaveIndex,
+                        'odEntries',
+                        (items) => items.map((item, i) => (i === index ? { ...item, defaultValue: Number(e.target.value) || 0 } : item)),
+                      )
+                      updateCanopenStore({ buses: nextBuses })
+                    }}
+                    className={inputStyles}
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    )
   }
-
-  const normalizeCanopenOdEntry = useCallback((raw: unknown): CanopenOdEntry | null => {
-    if (!raw || typeof raw !== 'object') return null
-
-    const entry = raw as Record<string, unknown>
-    const parseIntValue = (value: unknown, fallback = 0): number => {
-      if (typeof value === 'number' && Number.isFinite(value)) return value
-      if (typeof value === 'string') {
-        const trimmed = value.trim()
-        if (!trimmed) return fallback
-        const asHex = trimmed.startsWith('0x') || trimmed.startsWith('0X')
-        return Number.parseInt(trimmed, asHex ? 16 : 10)
-      }
-      return fallback
-    }
-    const parseType = (value: unknown): CanopenOdEntry['dataType'] => {
-      const typed = typeof value === 'string' || typeof value === 'number' ? String(value).trim().toLowerCase() : ''
-      if (!typed) return 'u32'
-      const map: Record<string, CanopenOdEntry['dataType']> = {
-        bool: 'bool',
-        boolean: 'bool',
-        int8: 'i8',
-        i8: 'i8',
-        uint8: 'u8',
-        u8: 'u8',
-        int16: 'i16',
-        i16: 'i16',
-        uint16: 'u16',
-        u16: 'u16',
-        int32: 'i32',
-        i32: 'i32',
-        uint32: 'u32',
-        u32: 'u32',
-        int64: 'i64',
-        i64: 'i64',
-        uint64: 'u64',
-        u64: 'u64',
-        float32: 'f32',
-        f32: 'f32',
-        float64: 'f64',
-        f64: 'f64',
-        string: 'string',
-        bytes: 'bytes',
-      }
-      return map[typed] ?? 'u32'
-    }
-    const parseAccess = (value: unknown): CanopenOdEntry['access'] => {
-      const access = typeof value === 'string' ? value.trim().toLowerCase() : ''
-      const map: Record<string, CanopenOdEntry['access']> = {
-        ro: 'ro',
-        wo: 'wo',
-        rw: 'rw',
-        rwr: 'rwr',
-        const: 'const',
-      }
-      return map[access] ?? 'rw'
-    }
-    const index = parseIntValue(entry.index ?? entry.odIndex ?? entry.idx ?? 0)
-    const subIndex = parseIntValue(entry.subIndex ?? entry.subindex ?? 0)
-    const rawDefaultValue = entry.defaultValue ?? entry.default ?? 0
-    const defaultValue =
-      typeof rawDefaultValue === 'number' || typeof rawDefaultValue === 'string' || typeof rawDefaultValue === 'boolean'
-        ? rawDefaultValue
-        : rawDefaultValue === null
-          ? null
-          : 0
-    const nameValue =
-      typeof entry.name === 'string'
-        ? entry.name
-        : typeof entry.label === 'string'
-          ? entry.label
-          : `entry_${index.toString(16)}`
-
-    return {
-      name: nameValue,
-      index,
-      subIndex: subIndex > 0xff ? 0 : subIndex,
-      dataType: parseType(entry.dataType ?? entry.type),
-      access: parseAccess(entry.access),
-      defaultValue,
-      description: typeof entry.description === 'string' ? entry.description : '',
-    }
-  }, [])
-
-  const handleCanopenOdEntryChange = useCallback(
-    (busIndex: number, entryIndex: number, updates: Partial<CanopenOdEntry>) => {
-      const nextBuses = [...canopenConfig.buses]
-      const current = nextBuses[busIndex]?.odEntries ?? []
-      const nextEntries = [...current]
-      nextEntries[entryIndex] = { ...(nextEntries[entryIndex] ?? { index: 0x1000, dataType: 'u32', access: 'rw' }), ...updates }
-      nextBuses[busIndex] = { ...nextBuses[busIndex], odEntries: nextEntries }
-      updateCanopenStore({ buses: nextBuses })
-    },
-    [canopenConfig, updateCanopenStore],
-  )
-
-  const handleAddCanopenOdEntry = useCallback(
-    (busIndex: number) => {
-      const nextBuses = [...canopenConfig.buses]
-      const nextEntries = [...(nextBuses[busIndex]?.odEntries ?? [])]
-      nextEntries.push({ name: `entry_${nextEntries.length + 1}`, index: 0x1000 + nextEntries.length, subIndex: 0, dataType: 'u32', access: 'rw', defaultValue: 0 })
-      nextBuses[busIndex] = { ...nextBuses[busIndex], odEntries: nextEntries }
-      updateCanopenStore({ buses: nextBuses })
-    },
-    [canopenConfig, updateCanopenStore],
-  )
-
-  const handleRemoveCanopenOdEntry = useCallback(
-    (busIndex: number, entryIndex: number) => {
-      const nextBuses = [...canopenConfig.buses]
-      nextBuses[busIndex] = {
-        ...nextBuses[busIndex],
-        odEntries: (nextBuses[busIndex]?.odEntries ?? []).filter((_, i) => i !== entryIndex),
-      }
-      updateCanopenStore({ buses: nextBuses })
-    },
-    [canopenConfig, updateCanopenStore],
-  )
-
-  const handleImportCanopenOd = useCallback(
-    async (busIndex: number, event: React.ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0]
-      if (!file) return
-
-      try {
-        const text = await file.text()
-        const parsed = JSON.parse(text) as unknown
-        const candidates = Array.isArray(parsed)
-          ? parsed
-          : Array.isArray((parsed as { odEntries?: unknown[] })?.odEntries)
-            ? (parsed as { odEntries: unknown[] }).odEntries
-            : Array.isArray((parsed as { objectDictionary?: unknown[] })?.objectDictionary)
-              ? (parsed as { objectDictionary: unknown[] }).objectDictionary
-              : []
-
-        const normalized = candidates
-          .map((entry) => normalizeCanopenOdEntry(entry))
-          .filter((entry): entry is CanopenOdEntry => entry !== null)
-
-        if (normalized.length === 0) return
-
-        const nextBuses = [...canopenConfig.buses]
-        const currentEntries = nextBuses[busIndex]?.odEntries ?? []
-        nextBuses[busIndex] = { ...nextBuses[busIndex], odEntries: [...currentEntries, ...normalized] }
-        updateCanopenStore({ buses: nextBuses })
-      } catch (error) {
-        console.warn('Failed to import CANopen OD JSON', error)
-      } finally {
-        event.target.value = ''
-      }
-    },
-    [canopenConfig, normalizeCanopenOdEntry, updateCanopenStore],
-  )
 
   return (
     <div className='flex h-full w-full flex-col overflow-y-auto bg-neutral-100 p-6 dark:bg-neutral-900'>
@@ -463,633 +1041,272 @@ const CanopenDeviceEditor = () => {
             </button>
           </div>
 
-          <div className='flex flex-col gap-4'>
+          <Tabs.Root
+            value={activeBusTab}
+            onValueChange={setActiveBusTab}
+            className='flex flex-col gap-4'
+          >
+            <Tabs.List className='flex flex-wrap gap-2 border-b border-neutral-200 pb-2 dark:border-neutral-800'>
+              {canopenConfig.buses.map((bus, busIndex) => (
+                <Tabs.Trigger
+                  key={`${bus.name || 'bus'}-${busIndex}`}
+                  value={String(busIndex)}
+                  className='rounded border border-neutral-300 bg-white px-2 py-1 text-[11px] font-medium text-neutral-700 data-[state=active]:border-brand data-[state=active]:text-brand dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-300'
+                >
+                  {bus.name || `bus${busIndex + 1}`} ({bus.interface || 'can0'})
+                </Tabs.Trigger>
+              ))}
+            </Tabs.List>
+
             {canopenConfig.buses.map((bus, busIndex) => (
-              <div key={`${bus.name}-${busIndex}`} className='rounded-lg border border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-800 dark:bg-neutral-900'>
-                <div className='mb-4 flex items-center justify-between gap-3'>
-                  <div className='flex items-center gap-3'>
-                    <div className='flex items-center gap-2'>
-                      <ToggleSwitch
-                        checked={bus.enabled ?? true}
-                        onCheckedChange={(checked) => handleCanopenBusChange(busIndex, { enabled: checked })}
-                      />
-                      <span className='text-xs font-medium text-neutral-700 dark:text-neutral-300'>Enabled</span>
+              <Tabs.Content key={`bus-content-${busIndex}`} value={String(busIndex)} className='space-y-4'>
+                <div className='rounded-lg border border-neutral-200 bg-neutral-50 p-4 dark:border-neutral-800 dark:bg-neutral-900'>
+                  <div className='mb-4 flex items-center justify-between gap-3'>
+                    <div className='flex items-center gap-3'>
+                      <div className='flex items-center gap-2'>
+                        <ToggleSwitch
+                          checked={bus.enabled ?? true}
+                          onCheckedChange={(checked) => handleCanopenBusChange(busIndex, { enabled: checked })}
+                        />
+                        <span className='text-xs font-medium text-neutral-700 dark:text-neutral-300'>Enabled</span>
+                      </div>
+                      <span className='rounded border border-neutral-300 bg-white px-2 py-1 text-[11px] font-medium text-neutral-700 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-300'>
+                        Bus {busIndex + 1}
+                      </span>
                     </div>
-                    <span className='rounded border border-neutral-300 bg-white px-2 py-1 text-[11px] font-medium text-neutral-700 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-300'>
-                      Bus {busIndex + 1}
-                    </span>
-                  </div>
-                  {canopenConfig.buses.length > 1 && (
-                    <button
-                      type='button'
-                      onClick={() => handleRemoveCanopenBus(busIndex)}
-                      className='text-xs font-medium text-red-500 hover:text-red-600'
-                    >
-                      Remove Bus
-                    </button>
-                  )}
-                </div>
-
-                <div className='grid grid-cols-2 gap-4 md:grid-cols-4'>
-                  <div className='flex flex-col gap-1.5'>
-                    <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Name (总线名称)</Label>
-                    <InputWithRef
-                      value={bus.name}
-                      onChange={(e) => handleCanopenBusChange(busIndex, { name: e.target.value || `bus${busIndex}` })}
-                      className={inputStyles}
-                    />
-                  </div>
-                  <div className='flex flex-col gap-1.5'>
-                    <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Interface (接口名称)</Label>
-                    <InputWithRef
-                      value={bus.interface}
-                      onChange={(e) => handleCanopenBusChange(busIndex, { interface: e.target.value })}
-                      placeholder='can0'
-                      className={inputStyles}
-                    />
-                  </div>
-                  <div className='flex flex-col gap-1.5'>
-                    <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Node ID (节点 ID)</Label>
-                    <InputWithRef
-                      type='number'
-                      min={1}
-                      max={127}
-                      value={bus.nodeId}
-                      onChange={(e) =>
-                        handleCanopenBusChange(busIndex, {
-                          nodeId: Math.min(127, Math.max(1, Number(e.target.value) || 1)),
-                        })
-                      }
-                      className={inputStyles}
-                    />
-                  </div>
-                  <div className='flex flex-col gap-1.5'>
-                    <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Bitrate (波特率 bps)</Label>
-                    <Select
-                      value={String(bus.bitrate)}
-                      onValueChange={(value) => handleCanopenBusChange(busIndex, { bitrate: Number(value) })}
-                    >
-                      <SelectTrigger
-                        withIndicator
-                        placeholder='Select bitrate'
-                        className={CAN_SELECT_TRIGGER_STYLES}
-                      />
-                      <SelectContent className={CAN_SELECT_CONTENT_STYLES}>
-                        {CANOPEN_BITRATE_OPTIONS.map((option) => (
-                          <SelectItem key={option.value} value={option.value} className={CAN_SELECT_ITEM_STYLES}>
-                            <span className='text-start font-caption text-xs font-normal text-neutral-700 dark:text-neutral-100'>
-                              {option.label}
-                            </span>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className='flex flex-col gap-1.5'>
-                    <Label className='text-xs text-neutral-700 dark:text-neutral-300'>SJW (再同步跳转宽度)</Label>
-                    <InputWithRef
-                      type='number'
-                      min={1}
-                      max={4}
-                      value={bus.sjw ?? 1}
-                      onChange={(e) =>
-                        handleCanopenBusChange(busIndex, {
-                          sjw: Math.min(4, Math.max(1, Number(e.target.value) || 1)),
-                        })
-                      }
-                      className={inputStyles}
-                    />
-                  </div>
-                  <div className='flex flex-col gap-1.5'>
-                    <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Sample Point (采样点比例)</Label>
-                    <InputWithRef
-                      type='number'
-                      step='0.005'
-                      min={0.5}
-                      max={0.95}
-                      value={bus.samplePoint ?? 0.875}
-                      onChange={(e) =>
-                        handleCanopenBusChange(busIndex, {
-                          samplePoint: Math.min(0.95, Math.max(0.5, Number(e.target.value) || 0.875)),
-                        })
-                      }
-                      className={inputStyles}
-                    />
-                  </div>
-                  <div className='flex flex-col gap-1.5'>
-                    <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Bus-Off Restart (重启时间 ms)</Label>
-                    <InputWithRef
-                      type='number'
-                      min={0}
-                      value={bus.restartMs ?? 100}
-                      onChange={(e) => handleCanopenBusChange(busIndex, { restartMs: Number(e.target.value) || 0 })}
-                      className={inputStyles}
-                    />
-                  </div>
-                  <div className='flex items-center gap-2 pt-5'>
-                    <ToggleSwitch
-                      checked={bus.tripleSampling ?? false}
-                      onCheckedChange={(checked) => handleCanopenBusChange(busIndex, { tripleSampling: checked })}
-                    />
-                    <Label className='cursor-pointer text-xs text-neutral-700 dark:text-neutral-300'>Triple Sampling (三重采样)</Label>
-                  </div>
-                  <div className='flex flex-col gap-1.5'>
-                    <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Heartbeat (心跳 ms)</Label>
-                    <InputWithRef
-                      type='number'
-                      min={0}
-                      value={bus.heartbeatMs ?? 1000}
-                      onChange={(e) => handleCanopenBusChange(busIndex, { heartbeatMs: Number(e.target.value) || 0 })}
-                      className={inputStyles}
-                    />
-                  </div>
-                  <div className='flex flex-col gap-1.5'>
-                    <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Sync Period (同步周期 ms)</Label>
-                    <InputWithRef
-                      type='number'
-                      min={0}
-                      value={bus.syncPeriodMs ?? 0}
-                      onChange={(e) => handleCanopenBusChange(busIndex, { syncPeriodMs: Number(e.target.value) || 0 })}
-                      className={inputStyles}
-                    />
-                  </div>
-                </div>
-
-                <div className='mt-5 rounded border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-950'>
-                  <div className='mb-3 flex items-center justify-between'>
-                    <h3 className='text-xs font-semibold uppercase tracking-[0.12em] text-neutral-700 dark:text-neutral-300'>
-                      Object Dictionary
-                    </h3>
-                    <div className='flex items-center gap-2'>
+                    {canopenConfig.buses.length > 1 && (
                       <button
                         type='button'
-                        onClick={() => handleAddCanopenOdEntry(busIndex)}
-                        className='flex items-center gap-1 rounded bg-brand px-2 py-1 text-[11px] font-medium text-white hover:bg-brand-medium-dark'
+                        onClick={() => handleRemoveCanopenBus(busIndex)}
+                        className='text-xs font-medium text-red-500 hover:text-red-600'
                       >
-                        <PlusIcon className='h-3 w-3 stroke-white' />
-                        Add Entry
+                        Remove Bus
                       </button>
-                      <label className='flex cursor-pointer items-center gap-1 rounded bg-neutral-700 px-2 py-1 text-[11px] font-medium text-white hover:bg-neutral-800 dark:bg-neutral-700 dark:hover:bg-neutral-600'>
-                        Import OD
-                        <input
-                          type='file'
-                          accept='.json,.txt,.eds'
-                          className='hidden'
-                          onChange={(event) => void handleImportCanopenOd(busIndex, event)}
+                    )}
+                  </div>
+
+                  <div className='grid grid-cols-2 gap-4 md:grid-cols-4'>
+                    <div className='flex flex-col gap-1.5'>
+                      <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Name (总线名称)</Label>
+                      <InputWithRef
+                        value={bus.name}
+                        onChange={(e) => handleCanopenBusChange(busIndex, { name: e.target.value || `bus${busIndex}` })}
+                        className={inputStyles}
+                      />
+                    </div>
+                    <div className='flex flex-col gap-1.5'>
+                      <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Interface (接口名称)</Label>
+                      <InputWithRef
+                        value={bus.interface}
+                        onChange={(e) => handleCanopenBusChange(busIndex, { interface: e.target.value })}
+                        placeholder='can0'
+                        className={inputStyles}
+                      />
+                    </div>
+                    <div className='flex flex-col gap-1.5'>
+                      <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Local Node ID (本地节点 ID)</Label>
+                      <InputWithRef
+                        type='number'
+                        min={1}
+                        max={127}
+                        value={bus.localNodeId ?? 127}
+                        onChange={(e) =>
+                          handleCanopenBusChange(busIndex, {
+                            localNodeId: Math.min(127, Math.max(1, Number(e.target.value) || 1)),
+                          })
+                        }
+                        className={inputStyles}
+                      />
+                    </div>
+                    <div className='flex flex-col gap-1.5'>
+                      <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Bitrate (波特率 bps)</Label>
+                      <Select
+                        value={String(bus.bitrate)}
+                        onValueChange={(value) => handleCanopenBusChange(busIndex, { bitrate: Number(value) })}
+                      >
+                        <SelectTrigger
+                          withIndicator
+                          placeholder='Select bitrate'
+                          className={CAN_SELECT_TRIGGER_STYLES}
                         />
-                      </label>
+                        <SelectContent className={CAN_SELECT_CONTENT_STYLES}>
+                          {CANOPEN_BITRATE_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value} className={CAN_SELECT_ITEM_STYLES}>
+                              <span className='text-start font-caption text-xs font-normal text-neutral-700 dark:text-neutral-100'>
+                                {option.label}
+                              </span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className='flex flex-col gap-1.5'>
+                      <Label className='text-xs text-neutral-700 dark:text-neutral-300'>SJW (再同步跳转宽度)</Label>
+                      <InputWithRef
+                        type='number'
+                        min={1}
+                        max={4}
+                        value={bus.sjw ?? 1}
+                        onChange={(e) =>
+                          handleCanopenBusChange(busIndex, {
+                            sjw: Math.min(4, Math.max(1, Number(e.target.value) || 1)),
+                          })
+                        }
+                        className={inputStyles}
+                      />
+                    </div>
+                    <div className='flex flex-col gap-1.5'>
+                      <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Sample Point (采样点比例)</Label>
+                      <InputWithRef
+                        type='number'
+                        step='0.005'
+                        min={0.5}
+                        max={0.95}
+                        value={bus.samplePoint ?? 0.875}
+                        onChange={(e) =>
+                          handleCanopenBusChange(busIndex, {
+                            samplePoint: Math.min(0.95, Math.max(0.5, Number(e.target.value) || 0.875)),
+                          })
+                        }
+                        className={inputStyles}
+                      />
+                    </div>
+                    <div className='flex flex-col gap-1.5'>
+                      <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Bus-Off Restart (重启时间 ms)</Label>
+                      <InputWithRef
+                        type='number'
+                        min={0}
+                        value={bus.restartMs ?? 100}
+                        onChange={(e) => handleCanopenBusChange(busIndex, { restartMs: Number(e.target.value) || 0 })}
+                        className={inputStyles}
+                      />
+                    </div>
+                    <div className='flex items-center gap-2 pt-5'>
+                      <ToggleSwitch
+                        checked={bus.tripleSampling ?? false}
+                        onCheckedChange={(checked) => handleCanopenBusChange(busIndex, { tripleSampling: checked })}
+                      />
+                      <Label className='cursor-pointer text-xs text-neutral-700 dark:text-neutral-300'>Triple Sampling (三重采样)</Label>
+                    </div>
+                    <div className='flex flex-col gap-1.5'>
+                      <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Heartbeat (心跳 ms)</Label>
+                      <InputWithRef
+                        type='number'
+                        min={0}
+                        value={bus.heartbeatMs ?? 1000}
+                        onChange={(e) => handleCanopenBusChange(busIndex, { heartbeatMs: Number(e.target.value) || 0 })}
+                        className={inputStyles}
+                      />
+                    </div>
+                    <div className='flex flex-col gap-1.5'>
+                      <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Sync Period (同步周期 ms)</Label>
+                      <InputWithRef
+                        type='number'
+                        min={0}
+                        value={bus.syncPeriodMs ?? 0}
+                        onChange={(e) => handleCanopenBusChange(busIndex, { syncPeriodMs: Number(e.target.value) || 0 })}
+                        className={inputStyles}
+                      />
                     </div>
                   </div>
 
-                  {(bus.odEntries ?? []).length === 0 ? (
-                    <p className='text-xs italic text-neutral-500'>No object dictionary entries defined.</p>
-                  ) : (
-                    <div className='space-y-2'>
-                      {(bus.odEntries ?? []).map((entry, entryIndex) => (
-                        <div key={`${bus.name}-od-${entryIndex}`} className='grid grid-cols-[1.2fr_0.8fr_0.6fr_0.8fr_0.8fr_0.8fr_0.8fr_1.2fr_0.8fr_0.4fr] gap-2 rounded border border-neutral-200 bg-neutral-50 p-2 dark:border-neutral-800 dark:bg-neutral-900'>
-                          <div className='flex flex-col gap-1'>
-                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Name</Label>
-                            <InputWithRef
-                              value={entry.name ?? ''}
-                              onChange={(e) =>
-                                handleCanopenOdEntryChange(busIndex, entryIndex, { name: e.target.value || `entry_${entryIndex + 1}` })
-                              }
-                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
-                            />
-                          </div>
-                          <div className='flex flex-col gap-1'>
-                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Index</Label>
-                            <InputWithRef
-                              type='number'
-                              value={entry.index}
-                              onChange={(e) =>
-                                handleCanopenOdEntryChange(busIndex, entryIndex, {
-                                  index: Number(e.target.value) || 0,
-                                })
-                              }
-                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
-                            />
-                          </div>
-                          <div className='flex flex-col gap-1'>
-                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Sub</Label>
-                            <InputWithRef
-                              type='number'
-                              value={entry.subIndex ?? 0}
-                              onChange={(e) =>
-                                handleCanopenOdEntryChange(busIndex, entryIndex, {
-                                  subIndex: Number(e.target.value) || 0,
-                                })
-                              }
-                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
-                            />
-                          </div>
-                          <div className='flex flex-col gap-1'>
-                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Type</Label>
-                            <select
-                              value={entry.dataType ?? 'u32'}
-                              onChange={(e) =>
-                                handleCanopenOdEntryChange(busIndex, entryIndex, {
-                                  dataType: (e.target.value as CanopenOdEntry['dataType']) ?? 'u32',
-                                })
-                              }
-                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
-                            >
-                              <option value='bool'>bool</option>
-                              <option value='u8'>u8</option>
-                              <option value='i8'>i8</option>
-                              <option value='u16'>u16</option>
-                              <option value='i16'>i16</option>
-                              <option value='u32'>u32</option>
-                              <option value='i32'>i32</option>
-                              <option value='u64'>u64</option>
-                              <option value='i64'>i64</option>
-                              <option value='f32'>f32</option>
-                              <option value='f64'>f64</option>
-                              <option value='string'>string</option>
-                              <option value='bytes'>bytes</option>
-                            </select>
-                          </div>
-                          <div className='flex flex-col gap-1'>
-                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Access</Label>
-                            <select
-                              value={entry.access ?? 'rw'}
-                              onChange={(e) =>
-                                handleCanopenOdEntryChange(busIndex, entryIndex, {
-                                  access: (e.target.value as CanopenOdEntry['access']) ?? 'rw',
-                                })
-                              }
-                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
-                            >
-                              <option value='ro'>ro</option>
-                              <option value='wo'>wo</option>
-                              <option value='rw'>rw</option>
-                              <option value='rwr'>rwr</option>
-                              <option value='const'>const</option>
-                            </select>
-                          </div>
-                          <div className='flex flex-col gap-1'>
-                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Default</Label>
-                            <InputWithRef
-                              value={String(entry.defaultValue ?? 0)}
-                              onChange={(e) =>
-                                handleCanopenOdEntryChange(busIndex, entryIndex, {
-                                  defaultValue: e.target.value,
-                                })
-                              }
-                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
-                            />
-                          </div>
-                          <div className='flex items-end justify-center'>
-                            <button
-                              type='button'
-                              onClick={() => handleRemoveCanopenOdEntry(busIndex, entryIndex)}
-                              className='text-neutral-500 hover:text-red-500'
-                            >
-                              <TrashIcon className='h-3.5 w-3.5' />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className='mt-5 rounded border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-950'>
-                  <div className='mb-3 flex items-center justify-between'>
-                    <h3 className='text-xs font-semibold uppercase tracking-[0.12em] text-neutral-700 dark:text-neutral-300'>
-                      SDO Entries
-                    </h3>
-                    <button
-                      type='button'
-                      onClick={() => handleAddCanopenSdo(busIndex)}
-                      className='flex items-center gap-1 rounded bg-brand px-2 py-1 text-[11px] font-medium text-white hover:bg-brand-medium-dark'
-                    >
-                      <PlusIcon className='h-3 w-3 stroke-white' />
-                      Add SDO
-                    </button>
-                  </div>
-
-                  {(bus.sdo ?? []).length === 0 ? (
-                    <p className='text-xs italic text-neutral-500'>No SDO entries configured.</p>
-                  ) : (
-                    <div className='space-y-2'>
-                      {(bus.sdo ?? []).map((sdoEntry, sdoIndex) => (
-                        <div key={`${bus.name}-sdo-${sdoIndex}`} className='grid grid-cols-[1.2fr_0.8fr_0.6fr_0.8fr_0.8fr_1.2fr_0.8fr_0.4fr] gap-2 rounded border border-neutral-200 bg-neutral-50 p-2 dark:border-neutral-800 dark:bg-neutral-900'>
-                          <div className='flex flex-col gap-1'>
-                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Name</Label>
-                            <InputWithRef
-                              value={sdoEntry.name ?? ''}
-                              onChange={(e) => handleCanopenSdoChange(busIndex, sdoIndex, { name: e.target.value || `sdo_${sdoIndex + 1}` })}
-                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
-                            />
-                          </div>
-                          <div className='flex flex-col gap-1'>
-                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Index</Label>
-                            <InputWithRef
-                              type='number'
-                              value={sdoEntry.index}
-                              onChange={(e) => handleCanopenSdoChange(busIndex, sdoIndex, { index: Number(e.target.value) || 0 })}
-                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
-                            />
-                          </div>
-                          <div className='flex flex-col gap-1'>
-                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Sub</Label>
-                            <InputWithRef
-                              type='number'
-                              value={sdoEntry.subIndex ?? 0}
-                              onChange={(e) => handleCanopenSdoChange(busIndex, sdoIndex, { subIndex: Number(e.target.value) || 0 })}
-                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
-                            />
-                          </div>
-                          <div className='flex flex-col gap-1'>
-                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Type</Label>
-                            <select
-                              value={sdoEntry.dataType ?? 'u32'}
-                              onChange={(e) =>
-                                handleCanopenSdoChange(busIndex, sdoIndex, {
-                                  dataType: (e.target.value as CanopenSdoEntry['dataType']) ?? 'u32',
-                                })
-                              }
-                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
-                            >
-                              <option value='bool'>bool</option>
-                              <option value='u8'>u8</option>
-                              <option value='i8'>i8</option>
-                              <option value='u16'>u16</option>
-                              <option value='i16'>i16</option>
-                              <option value='u32'>u32</option>
-                              <option value='i32'>i32</option>
-                              <option value='u64'>u64</option>
-                              <option value='i64'>i64</option>
-                              <option value='f32'>f32</option>
-                              <option value='f64'>f64</option>
-                              <option value='string'>string</option>
-                              <option value='bytes'>bytes</option>
-                            </select>
-                          </div>
-                          <div className='flex flex-col gap-1'>
-                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Access</Label>
-                            <select
-                              value={sdoEntry.access ?? 'rw'}
-                              onChange={(e) =>
-                                handleCanopenSdoChange(busIndex, sdoIndex, {
-                                  access: (e.target.value as CanopenSdoEntry['access']) ?? 'rw',
-                                })
-                              }
-                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
-                            >
-                              <option value='ro'>ro</option>
-                              <option value='wo'>wo</option>
-                              <option value='rw'>rw</option>
-                              <option value='rwr'>rwr</option>
-                              <option value='const'>const</option>
-                            </select>
-                          </div>
-                          <div className='flex flex-col gap-1'>
-                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>PLC</Label>
-                            <InputWithRef
-                              value={sdoEntry.plcAddress ?? ''}
-                              onChange={(e) => handleCanopenSdoChange(busIndex, sdoIndex, {
-                                plcAddress: e.target.value || undefined,
-                                binding: {
-                                  direction: sdoEntry.direction ?? 'output',
-                                  iecAddress: e.target.value || '',
-                                },
-                              })}
-                              placeholder='%QW0 / %IW0'
-                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
-                            />
-                          </div>
-                          <div className='flex flex-col gap-1'>
-                            <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Dir</Label>
-                            <select
-                              value={sdoEntry.direction ?? 'output'}
-                              onChange={(e) => handleCanopenSdoChange(busIndex, sdoIndex, {
-                                direction: (e.target.value as 'input' | 'output') ?? 'output',
-                                binding: {
-                                  direction: (e.target.value as 'input' | 'output') ?? 'output',
-                                  iecAddress: sdoEntry.plcAddress ?? '',
-                                },
-                              })}
-                              className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
-                            >
-                              <option value='input'>input</option>
-                              <option value='output'>output</option>
-                            </select>
-                          </div>
-                          <div className='flex items-end justify-center'>
-                            <button
-                              type='button'
-                              onClick={() => handleRemoveCanopenSdo(busIndex, sdoIndex)}
-                              className='text-neutral-500 hover:text-red-500'
-                            >
-                              <TrashIcon className='h-3.5 w-3.5' />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {(['tpdo', 'rpdo'] as const).map((pdoType) => (
-                  <div key={pdoType} className='mt-5 rounded border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-950'>
+                  <div className='mt-5 rounded border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-950'>
                     <div className='mb-3 flex items-center justify-between'>
                       <h3 className='text-xs font-semibold uppercase tracking-[0.12em] text-neutral-700 dark:text-neutral-300'>
-                        {pdoType.toUpperCase()} Entries
+                        Slaves
                       </h3>
                       <button
                         type='button'
-                        onClick={() => handleAddCanopenPdo(busIndex, pdoType)}
+                        onClick={() => handleAddCanopenSlave(busIndex)}
                         className='flex items-center gap-1 rounded bg-brand px-2 py-1 text-[11px] font-medium text-white hover:bg-brand-medium-dark'
                       >
                         <PlusIcon className='h-3 w-3 stroke-white' />
-                        Add PDO
+                        Add Slave
                       </button>
                     </div>
-
-                    {(bus[pdoType] ?? []).length === 0 ? (
-                      <p className='text-xs italic text-neutral-500'>No {pdoType.toUpperCase()} configured.</p>
-                    ) : (
-                      <div className='space-y-3'>
-                        {(bus[pdoType] ?? []).map((pdo, pdoIndex) => (
-                          <div key={`${pdoType}-${pdoIndex}`} className='rounded border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-900'>
-                            <div className='mb-2 flex items-center justify-between gap-3'>
-                              <span className='text-[11px] font-semibold uppercase tracking-[0.12em] text-neutral-600 dark:text-neutral-400'>
-                                PDO {pdoIndex + 1}
-                              </span>
+                    <Tabs.Root
+                      value={activeSlaveTab[busIndex] ?? '0'}
+                      onValueChange={(value) => setActiveSlaveTab((prev) => ({ ...prev, [busIndex]: value }))}
+                      className='flex flex-col gap-3'
+                    >
+                      <Tabs.List className='flex flex-wrap gap-2 border-b border-neutral-200 pb-2 dark:border-neutral-800'>
+                        {(bus.slaves ?? [defaultCanopenSlave()]).map((slave, slaveIndex) => (
+                          <Tabs.Trigger
+                            key={`${bus.name}-slave-${slaveIndex}`}
+                            value={String(slaveIndex)}
+                            className='rounded border border-neutral-300 bg-white px-2 py-1 text-[11px] font-medium text-neutral-700 data-[state=active]:border-brand data-[state=active]:text-brand dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-300'
+                          >
+                            {slave.name || `slave_${slaveIndex + 1}`} (NID {slave.nodeId})
+                          </Tabs.Trigger>
+                        ))}
+                      </Tabs.List>
+                      {(bus.slaves ?? [defaultCanopenSlave()]).map((slave, slaveIndex) => (
+                        <Tabs.Content key={`${bus.name}-slave-content-${slaveIndex}`} value={String(slaveIndex)} className='space-y-4'>
+                          <div className='grid grid-cols-2 gap-3'>
+                            <div className='flex flex-col gap-1.5'>
+                              <Label className='text-[11px] text-neutral-700 dark:text-neutral-300'>Slave Name</Label>
+                              <InputWithRef
+                                value={slave.name}
+                                onChange={(e) => handleCanopenSlaveChange(busIndex, slaveIndex, { name: e.target.value || `slave_${slaveIndex + 1}` })}
+                                className={inputStyles}
+                              />
+                            </div>
+                            <div className='flex flex-col gap-1.5'>
+                              <Label className='text-[11px] text-neutral-700 dark:text-neutral-300'>Node ID</Label>
+                              <InputWithRef
+                                type='number'
+                                min={1}
+                                max={127}
+                                value={slave.nodeId}
+                                onChange={(e) =>
+                                  handleCanopenSlaveChange(busIndex, slaveIndex, {
+                                    nodeId: Math.min(127, Math.max(1, Number(e.target.value) || 1)),
+                                  })
+                                }
+                                className={inputStyles}
+                              />
+                            </div>
+                          </div>
+                          <div className='flex items-center justify-between'>
+                            <div className='flex items-center gap-2'>
+                              <ToggleSwitch
+                                checked={slave.enabled ?? true}
+                                onCheckedChange={(checked) => handleCanopenSlaveChange(busIndex, slaveIndex, { enabled: checked })}
+                              />
+                              <span className='text-[11px] text-neutral-700 dark:text-neutral-300'>Enabled</span>
+                            </div>
+                            {(bus.slaves ?? []).length > 1 && (
                               <button
                                 type='button'
-                                onClick={() => handleRemoveCanopenPdo(busIndex, pdoType, pdoIndex)}
+                                onClick={() => handleRemoveCanopenSlave(busIndex, slaveIndex)}
                                 className='text-[11px] font-medium text-red-500 hover:text-red-600'
                               >
-                                Remove PDO
+                                Remove Slave
                               </button>
-                            </div>
-
-                            <div className='grid grid-cols-2 gap-3'>
-                              <div className='flex flex-col gap-1.5'>
-                                <Label className='text-[11px] text-neutral-700 dark:text-neutral-300'>Index</Label>
-                                <InputWithRef
-                                  type='number'
-                                  value={pdo.index}
-                                  onChange={(e) =>
-                                    handleCanopenPdoChange(busIndex, pdoType, pdoIndex, {
-                                      index: Number(e.target.value) || 0,
-                                    })
-                                  }
-                                  className={inputStyles}
-                                />
-                              </div>
-                              <div className='flex flex-col gap-1.5'>
-                                <Label className='text-[11px] text-neutral-700 dark:text-neutral-300'>SubIndex</Label>
-                                <InputWithRef
-                                  type='number'
-                                  value={pdo.subIndex ?? 0}
-                                  onChange={(e) =>
-                                    handleCanopenPdoChange(busIndex, pdoType, pdoIndex, {
-                                      subIndex: Number(e.target.value) || 0,
-                                    })
-                                  }
-                                  className={inputStyles}
-                                />
-                              </div>
-                            </div>
-
-                            <div className='mt-3 flex items-center justify-between'>
-                              <span className='text-[11px] font-medium text-neutral-600 dark:text-neutral-400'>Mappings</span>
-                              <button
-                                type='button'
-                                onClick={() => handleAddCanopenMapping(busIndex, pdoType, pdoIndex)}
-                                className='flex items-center gap-1 rounded bg-neutral-700 px-2 py-1 text-[11px] font-medium text-white hover:bg-neutral-800 dark:bg-neutral-700 dark:hover:bg-neutral-600'
-                              >
-                                <PlusIcon className='h-3 w-3 stroke-white' />
-                                Add Mapping
-                              </button>
-                            </div>
-
-                            {(pdo.mapping ?? []).length === 0 ? (
-                              <p className='mt-2 text-[11px] italic text-neutral-500'>No mappings defined.</p>
-                            ) : (
-                              <div className='mt-2 space-y-2'>
-                                {(pdo.mapping ?? []).map((mapping, mappingIndex) => (
-                                  <div key={`${pdoType}-mapping-${mappingIndex}`} className='grid grid-cols-[0.8fr_0.6fr_0.7fr_1.2fr_0.9fr_1.2fr_0.2fr] gap-2 rounded bg-white p-2 dark:bg-neutral-950'>
-                                    <div className='flex flex-col gap-1'>
-                                      <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Index</Label>
-                                      <InputWithRef
-                                        type='number'
-                                        value={mapping.index}
-                                        onChange={(e) =>
-                                          handleCanopenMappingChange(busIndex, pdoType, pdoIndex, mappingIndex, {
-                                            index: Number(e.target.value) || 0,
-                                          })
-                                        }
-                                        className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
-                                      />
-                                    </div>
-                                    <div className='flex flex-col gap-1'>
-                                      <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Sub</Label>
-                                      <InputWithRef
-                                        type='number'
-                                        value={mapping.subIndex ?? 0}
-                                        onChange={(e) =>
-                                          handleCanopenMappingChange(busIndex, pdoType, pdoIndex, mappingIndex, {
-                                            subIndex: Number(e.target.value) || 0,
-                                          })
-                                        }
-                                        className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
-                                      />
-                                    </div>
-                                    <div className='flex flex-col gap-1'>
-                                      <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Bits</Label>
-                                      <InputWithRef
-                                        type='number'
-                                        value={mapping.bitLength ?? 8}
-                                        onChange={(e) =>
-                                          handleCanopenMappingChange(busIndex, pdoType, pdoIndex, mappingIndex, {
-                                            bitLength: Number(e.target.value) || 8,
-                                          })
-                                        }
-                                        className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
-                                      />
-                                    </div>
-                                    <div className='flex flex-col gap-1'>
-                                      <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>PLC</Label>
-                                      <InputWithRef
-                                        value={mapping.plcAddress ?? ''}
-                                        onChange={(e) =>
-                                          handleCanopenMappingChange(busIndex, pdoType, pdoIndex, mappingIndex, {
-                                            plcAddress: e.target.value || undefined,
-                                            binding: {
-                                              direction: mapping.direction ?? 'output',
-                                              iecAddress: e.target.value || '',
-                                            },
-                                          })
-                                        }
-                                        placeholder='%QW0 / %IW0'
-                                        className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
-                                      />
-                                    </div>
-                                    <div className='flex flex-col gap-1'>
-                                      <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Dir</Label>
-                                      <select
-                                        value={mapping.direction ?? 'output'}
-                                        onChange={(e) =>
-                                          handleCanopenMappingChange(busIndex, pdoType, pdoIndex, mappingIndex, {
-                                            direction: (e.target.value as 'input' | 'output') ?? 'output',
-                                            binding: {
-                                              direction: (e.target.value as 'input' | 'output') ?? 'output',
-                                              iecAddress: mapping.plcAddress ?? '',
-                                            },
-                                          })
-                                        }
-                                        className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
-                                      >
-                                        <option value='input'>input</option>
-                                        <option value='output'>output</option>
-                                      </select>
-                                    </div>
-                                    <div className='flex flex-col gap-1'>
-                                      <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Name</Label>
-                                      <div className='flex items-center gap-1'>
-                                        <InputWithRef
-                                          value={mapping.name ?? ''}
-                                          onChange={(e) =>
-                                            handleCanopenMappingChange(busIndex, pdoType, pdoIndex, mappingIndex, {
-                                              name: e.target.value,
-                                            })
-                                          }
-                                          className='h-[26px] w-full rounded border border-neutral-300 bg-white px-2 text-[11px] dark:border-neutral-700 dark:bg-neutral-950'
-                                        />
-                                        <button
-                                          type='button'
-                                          onClick={() =>
-                                            handleRemoveCanopenMapping(
-                                              busIndex,
-                                              pdoType,
-                                              pdoIndex,
-                                              mappingIndex,
-                                            )
-                                          }
-                                          className='text-neutral-500 hover:text-red-500'
-                                        >
-                                          <TrashIcon className='h-3.5 w-3.5' />
-                                        </button>
-                                      </div>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
                             )}
                           </div>
-                        ))}
-                      </div>
-                    )}
+                          <div className='space-y-4'>
+                            <div className='rounded border border-dashed border-neutral-300 bg-neutral-50 p-3 text-[11px] text-neutral-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-400'>
+                              PDO/SDO and OD bindings for this slave are scoped to node {slave.nodeId}.
+                            </div>
+
+                            {renderOdSection(busIndex, slaveIndex)}
+                            {renderPdoSection(busIndex, slaveIndex, 'tpdo')}
+                            {renderPdoSection(busIndex, slaveIndex, 'rpdo')}
+                            {renderSdoSection(busIndex, slaveIndex)}
+                          </div>
+                        </Tabs.Content>
+                      ))}
+                    </Tabs.Root>
                   </div>
-                ))}
-              </div>
+
+                  <div className='mt-5 rounded border border-dashed border-neutral-300 bg-neutral-50 p-3 text-[11px] text-neutral-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-400'>
+                    PDO/SDO/OD definitions belong to each slave and are configured under the per-slave tabs above.
+                  </div>
+                </div>
+              </Tabs.Content>
             ))}
-          </div>
+          </Tabs.Root>
         </div>
       </div>
     </div>

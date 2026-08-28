@@ -15,63 +15,93 @@ export function generateCanopenConfig(remoteDevices: PLCRemoteDevice[] | undefin
     const config = device.canopenConfig
     if (!config || !config.buses?.length) return []
 
-    return config.buses.filter((bus) => bus.enabled !== false).map((bus) => ({
-      name: bus.name,
-      interface: bus.interface,
-      enabled: bus.enabled ?? true,
-      node_id: bus.nodeId,
-      bitrate: bus.bitrate,
-      sjw: bus.sjw ?? 1,
-      sample_point: bus.samplePoint ?? 0.875,
-      restart_ms: bus.restartMs ?? 100,
-      triple_sampling: bus.tripleSampling ?? false,
-      heartbeat_ms: bus.heartbeatMs ?? 1000,
-      sync_period_ms: bus.syncPeriodMs ?? 0,
-      od_entries: (bus.odEntries ?? []).map((entry) => ({
-        name: entry.name ?? '',
-        index: entry.index,
-        sub_index: entry.subIndex ?? 0,
-        data_type: entry.dataType ?? 'u32',
-        access: entry.access ?? 'rw',
-        default_value: entry.defaultValue ?? 0,
-        description: entry.description ?? '',
-      })),
-      tpdo: (bus.tpdo ?? []).map((pdo) => ({
-        index: pdo.index,
-        sub_index: pdo.subIndex ?? 0,
-        mapping: (pdo.mapping ?? []).map((entry) => ({
-          index: entry.index,
-          sub_index: entry.subIndex ?? 0,
-          bit_length: entry.bitLength ?? 8,
-          name: entry.name ?? '',
-          plc_address: entry.plcAddress ?? entry.binding?.iecAddress ?? null,
-          direction: entry.direction ?? entry.binding?.direction ?? null,
+    return config.buses.filter((bus) => bus.enabled !== false).map((bus) => {
+      const localNodeId = bus.localNodeId ?? 127
+      const fallbackSlaveNodeId = 1
+      const baseSlaves = bus.slaves && bus.slaves.length > 0
+        ? bus.slaves
+        : [
+            {
+              name: bus.name || 'main_slave',
+              nodeId: fallbackSlaveNodeId,
+              enabled: true,
+              odEntries: [],
+              tpdo: [],
+              rpdo: [],
+              sdo: [],
+            },
+          ]
+
+      const slaves = baseSlaves.map((slave, index) => ({
+        ...slave,
+        nodeId: slave.nodeId ?? (index + 1),
+      }))
+
+      return {
+        name: bus.name,
+        interface: bus.interface,
+        enabled: bus.enabled ?? true,
+        local_node_id: localNodeId,
+        bitrate: bus.bitrate,
+        sjw: bus.sjw ?? 1,
+        sample_point: bus.samplePoint ?? 0.875,
+        restart_ms: bus.restartMs ?? 100,
+        triple_sampling: bus.tripleSampling ?? false,
+        heartbeat_ms: bus.heartbeatMs ?? 1000,
+        sync_period_ms: bus.syncPeriodMs ?? 0,
+        slaves: slaves.filter((slave) => slave.enabled !== false).map((slave) => ({
+          name: slave.name,
+          node_id: slave.nodeId,
+          enabled: slave.enabled ?? true,
+          od_entries: (slave.odEntries ?? []).map((entry) => ({
+            name: entry.name ?? '',
+            index: entry.index,
+            sub_index: entry.subIndex ?? 0,
+            data_type: entry.dataType ?? 'u32',
+            access: entry.access ?? 'rw',
+            default_value: entry.defaultValue ?? 0,
+            description: entry.description ?? '',
+          })),
+          tpdo: (slave.tpdo ?? []).map((pdo) => ({
+            name: pdo.name ?? '',
+            index: pdo.index,
+            sub_index: pdo.subIndex ?? 0,
+            mapping: (pdo.mapping ?? []).map((entry) => ({
+              index: entry.index,
+              sub_index: entry.subIndex ?? 0,
+              bit_length: entry.bitLength ?? 8,
+              name: entry.name ?? '',
+              plc_address: entry.plcAddress ?? null,
+              direction: entry.direction ?? null,
+            })),
+          })),
+          rpdo: (slave.rpdo ?? []).map((pdo) => ({
+            name: pdo.name ?? '',
+            index: pdo.index,
+            sub_index: pdo.subIndex ?? 0,
+            mapping: (pdo.mapping ?? []).map((entry) => ({
+              index: entry.index,
+              sub_index: entry.subIndex ?? 0,
+              bit_length: entry.bitLength ?? 8,
+              name: entry.name ?? '',
+              plc_address: entry.plcAddress ?? null,
+              direction: entry.direction ?? null,
+            })),
+          })),
+          sdo: (slave.sdo ?? []).map((entry) => ({
+            name: entry.name ?? '',
+            index: entry.index,
+            sub_index: entry.subIndex ?? 0,
+            data_type: entry.dataType ?? 'u32',
+            access: entry.access ?? 'rw',
+            default_value: entry.defaultValue ?? 0,
+            description: entry.description ?? '',
+            plc_address: entry.plcAddress ?? null,
+            direction: entry.direction ?? null,
+          })),
         })),
-      })),
-      rpdo: (bus.rpdo ?? []).map((pdo) => ({
-        index: pdo.index,
-        sub_index: pdo.subIndex ?? 0,
-        mapping: (pdo.mapping ?? []).map((entry) => ({
-          index: entry.index,
-          sub_index: entry.subIndex ?? 0,
-          bit_length: entry.bitLength ?? 8,
-          name: entry.name ?? '',
-          plc_address: entry.plcAddress ?? entry.binding?.iecAddress ?? null,
-          direction: entry.direction ?? entry.binding?.direction ?? null,
-        })),
-      })),
-      sdo: (bus.sdo ?? []).map((entry) => ({
-        name: entry.name ?? '',
-        index: entry.index,
-        sub_index: entry.subIndex ?? 0,
-        data_type: entry.dataType ?? 'u32',
-        access: entry.access ?? 'rw',
-        default_value: entry.defaultValue ?? 0,
-        description: entry.description ?? '',
-        plc_address: entry.plcAddress ?? entry.binding?.iecAddress ?? null,
-        direction: entry.direction ?? entry.binding?.direction ?? null,
-      })),
-    }))
+      }
+    })
   })
 
   if (buses.length === 0) return null
