@@ -41,14 +41,14 @@ describe('generateCanConfig', () => {
     expect(mapping.index).toBe(0x3210)
     expect(mapping.plcAddress).toBe('%QW11')
 
-    const firstSdo = makeCanopenSdoEntry('output')
+    const firstSdo = makeCanopenSdoEntry()
     expect(firstSdo.index).toBe(0x2000)
     expect(firstSdo.subIndex).toBe(0)
     expect(firstSdo.defaultValue).toBe(0)
 
-    const sdo = makeCanopenSdoEntry('output', [{ index: 0x4000, plcAddress: '%QW0' }, { index: 0x4400, plcAddress: '%QW44' }])
+    const sdo = makeCanopenSdoEntry([{ index: 0x4000 }, { index: 0x4400 }])
     expect(sdo.index).toBe(0x4410)
-    expect(sdo.plcAddress).toBe('%QW45')
+    expect(sdo.defaultValue).toBe(0)
   })
 
   it('returns null when no CAN remote device is configured', () => {
@@ -183,9 +183,7 @@ describe('generateCanConfig', () => {
                       ],
                     },
                   ],
-                  sdo: [
-                    { name: 'param_1', index: 0x2000, subIndex: 0, dataType: 'u16', access: 'rw', plcAddress: '%QW1', direction: 'output' },
-                  ],
+                  sdo: [{ name: 'param_1', index: 0x2000, subIndex: 0, dataType: 'u16', defaultValue: 0 }],
                 },
               ],
             },
@@ -206,7 +204,7 @@ describe('generateCanConfig', () => {
     expect(json.buses[0].slaves[0].tpdo[0].mapping[0].plc_address).toBe('%QW0')
     expect(json.buses[0].slaves[0].rpdo[0].name).toBe('rpdo_1')
     expect(json.buses[0].slaves[0].rpdo[0].mapping[0].plc_address).toBe('%IW0')
-    expect(json.buses[0].slaves[0].sdo[0].plc_address).toBe('%QW1')
+    expect(json.buses[0].slaves[0].sdo[0].default_value).toBe(0)
   })
 
   it('keeps local master node and remote slave node ids separate and never defaults slave to 127', () => {
@@ -297,17 +295,7 @@ describe('generateCanConfig', () => {
                       ],
                     },
                   ],
-                  sdo: [
-                    {
-                      name: 'deviceTypeSdo',
-                      index: 0x2000,
-                      subIndex: 0,
-                      dataType: 'u32',
-                      access: 'rw',
-                      plcAddress: '%IW0',
-                      direction: 'input',
-                    },
-                  ],
+                  sdo: [{ name: 'deviceTypeSdo', index: 0x2000, subIndex: 0, dataType: 'u32', defaultValue: 0 }],
                 },
               ],
             },
@@ -352,8 +340,8 @@ describe('generateCanConfig', () => {
     expect(output).toContain('"plc_address": "%QW0"')
     expect(output).toContain('"direction": "output"')
     expect(output).toContain('"sdo"')
-    expect(output).toContain('"plc_address": "%IW0"')
-    expect(output).toContain('"direction": "input"')
+    expect(output).not.toContain('"plc_address": "%IW0"')
+    expect(output).not.toContain('"direction": "input"')
   })
 
   it('generates JSON with 3 SDO entries and 2 PDO groups and bound PLC addresses', () => {
@@ -402,9 +390,9 @@ describe('generateCanConfig', () => {
                     },
                   ],
                   sdo: [
-                    { name: 'sdo_1', index: 0x2000, subIndex: 0, dataType: 'u16', access: 'rw', plcAddress: '%IW0', direction: 'input' },
-                    { name: 'sdo_2', index: 0x2001, subIndex: 0, dataType: 'u32', access: 'rw', plcAddress: '%ID1', direction: 'input' },
-                    { name: 'sdo_3', index: 0x2002, subIndex: 0, dataType: 'u8', access: 'rw', plcAddress: '%IB2', direction: 'output' },
+                    { name: 'sdo_1', index: 0x2000, subIndex: 0, dataType: 'u16', defaultValue: 0 },
+                    { name: 'sdo_2', index: 0x2001, subIndex: 0, dataType: 'u32', defaultValue: 0 },
+                    { name: 'sdo_3', index: 0x2002, subIndex: 0, dataType: 'u8', defaultValue: 0 },
                   ],
                 },
               ],
@@ -428,18 +416,18 @@ describe('generateCanConfig', () => {
     expect(json.buses[0].slaves[0].tpdo[0].mapping[0].plc_address).toBe('%QW0')
     expect(json.buses[0].slaves[0].tpdo[1].mapping[0].plc_address).toBe('%QB2')
     expect(json.buses[0].slaves[0].rpdo[0].mapping[0].plc_address).toBe('%IW10')
-    expect(json.buses[0].slaves[0].sdo[0].plc_address).toBe('%IW0')
-    expect(json.buses[0].slaves[0].sdo[1].plc_address).toBe('%ID1')
-    expect(json.buses[0].slaves[0].sdo[2].plc_address).toBe('%IB2')
+    expect(json.buses[0].slaves[0].sdo[0].default_value).toBe(0)
+    expect(json.buses[0].slaves[0].sdo[1].default_value).toBe(0)
+    expect(json.buses[0].slaves[0].sdo[2].default_value).toBe(0)
     expect(json.buses[0].slaves[0].sdo[0]).not.toHaveProperty('binding')
     expect(json.buses[0].slaves[0].tpdo[0].mapping[0]).not.toHaveProperty('binding')
 
     expect(output).toContain('"plc_address": "%QW0"')
     expect(output).toContain('"plc_address": "%QB2"')
     expect(output).toContain('"plc_address": "%IW10"')
-    expect(output).toContain('"plc_address": "%IW0"')
-    expect(output).toContain('"plc_address": "%ID1"')
-    expect(output).toContain('"plc_address": "%IB2"')
+    expect(output).not.toContain('"plc_address": "%IW0"')
+    expect(output).not.toContain('"plc_address": "%ID1"')
+    expect(output).not.toContain('"plc_address": "%IB2"')
     expect(output).not.toContain('"binding"')
   })
 
@@ -489,9 +477,7 @@ describe('generateCanConfig', () => {
                       ],
                     },
                   ],
-                  sdo: [
-                    { name: 'param_1', index: 0x2000, subIndex: 0, dataType: 'u32', access: 'rw', plcAddress: '%ID10', direction: 'input' },
-                  ],
+                  sdo: [{ name: 'param_1', index: 0x2000, subIndex: 0, dataType: 'u32', defaultValue: 0 }],
                 },
               ],
             },
@@ -520,12 +506,11 @@ describe('generateCanConfig', () => {
     expect(json.buses[0].slaves[0].od_entries[0].index).toBe(4096)
     expect(json.buses[0].slaves[0].tpdo[0].mapping[0].plc_address).toBe('%QW0')
     expect(json.buses[0].slaves[0].rpdo[0].mapping[0].plc_address).toBe('%IW0')
-    expect(json.buses[0].slaves[0].sdo[0].plc_address).toBe('%ID10')
+    expect(json.buses[0].slaves[0].sdo[0].default_value).toBe(0)
     expect(output).toContain('"can0"')
     expect(output).toContain('"bus0"')
     expect(output).toContain('"entry_1"')
     expect(output).toContain('"%QW0"')
     expect(output).toContain('"%IW0"')
-    expect(output).toContain('"%ID10"')
   })
 })

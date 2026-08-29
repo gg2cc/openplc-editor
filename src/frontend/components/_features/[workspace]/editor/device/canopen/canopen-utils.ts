@@ -78,10 +78,7 @@ export const makeCanopenPdo = (
   }
 }
 
-export const makeCanopenSdoEntry = (
-  direction: 'input' | 'output' = 'input',
-  existing: CanopenSdoEntry[] = [],
-): CanopenSdoEntry => {
+export const makeCanopenSdoEntry = (existing: CanopenSdoEntry[] = []): CanopenSdoEntry => {
   const nextIndex = getNextCanopenIndex(existing, 0x2000)
 
   return {
@@ -89,10 +86,7 @@ export const makeCanopenSdoEntry = (
     index: nextIndex,
     subIndex: 0,
     dataType: 'u32',
-    access: 'rw',
     defaultValue: 0,
     description: '',
-    plcAddress: getNextPlcWordAddress(direction, existing),
-    direction,
   }
 }

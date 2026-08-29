@@ -93,11 +93,8 @@ export function generateCanopenConfig(remoteDevices: PLCRemoteDevice[] | undefin
             index: entry.index,
             sub_index: entry.subIndex ?? 0,
             data_type: entry.dataType ?? 'u32',
-            access: entry.access ?? 'rw',
             default_value: entry.defaultValue ?? 0,
             description: entry.description ?? '',
-            plc_address: entry.plcAddress ?? null,
-            direction: entry.direction ?? null,
           })),
         })),
       }

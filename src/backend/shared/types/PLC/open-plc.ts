@@ -832,12 +832,8 @@ const CanopenSdoEntrySchema = z.object({
   index: z.number().int().min(0).max(0xffff),
   subIndex: z.number().int().min(0).max(0xff).optional(),
   dataType: z.enum(['bool', 'i8', 'u8', 'i16', 'u16', 'i32', 'u32', 'i64', 'u64', 'f32', 'f64', 'string', 'bytes']).optional(),
-  access: z.enum(['ro', 'wo', 'rw', 'rwr', 'const']).optional(),
   defaultValue: z.union([z.number(), z.string(), z.boolean(), z.null()]).optional(),
   description: z.string().optional(),
-  plcAddress: z.string().optional(),
-  direction: z.enum(['input', 'output']).optional(),
-  binding: CanopenCommunicationBindingSchema.optional(),
 })
 
 const CanopenOdEntrySchema = z.object({

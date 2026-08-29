@@ -491,12 +491,8 @@ export interface CanopenSdoEntry {
     | 'f64'
     | 'string'
     | 'bytes'
-  access?: 'ro' | 'wo' | 'rw' | 'rwr' | 'const'
   defaultValue?: number | string | boolean | null
   description?: string
-  plcAddress?: string
-  direction?: 'input' | 'output'
-  binding?: CanopenCommunicationBinding
 }
 
 export interface CanopenOdEntry {

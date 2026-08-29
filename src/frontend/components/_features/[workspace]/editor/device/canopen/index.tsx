@@ -617,7 +617,7 @@ const CanopenDeviceEditor = () => {
                 busIndex,
                 slaveIndex,
                 'sdo',
-                (items) => [...items, makeCanopenSdoEntry('input', items)],
+                (items) => [...items, makeCanopenSdoEntry(items)],
               )
               updateCanopenStore({ buses: nextBuses })
             }}
@@ -675,6 +675,34 @@ const CanopenDeviceEditor = () => {
                   />
                 </div>
                 <div className='flex flex-col gap-1'>
+                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Type</Label>
+                  <Select
+                    value={entry.dataType ?? 'u32'}
+                    onValueChange={(value) => {
+                      const nextBuses = updateCanopenSlaveArray(
+                        canopenConfig.buses,
+                        busIndex,
+                        slaveIndex,
+                        'sdo',
+                        (items) =>
+                          items.map((item, i) =>
+                            i === index ? { ...item, dataType: value as CanopenSdoEntry['dataType'] } : item,
+                          ),
+                      )
+                      updateCanopenStore({ buses: nextBuses })
+                    }}
+                  >
+                    <SelectTrigger withIndicator className={CAN_SELECT_TRIGGER_STYLES} />
+                    <SelectContent className={CAN_SELECT_CONTENT_STYLES}>
+                      {CANOPEN_DATA_TYPES.map((option) => (
+                        <SelectItem key={option} value={option} className={CAN_SELECT_ITEM_STYLES}>
+                          {option}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className='flex flex-col gap-1'>
                   <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Index</Label>
                   <InputWithRef
                     type='number'
@@ -711,105 +739,25 @@ const CanopenDeviceEditor = () => {
                   />
                 </div>
                 <div className='flex flex-col gap-1'>
-                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Type</Label>
-                  <Select
-                    value={entry.dataType ?? 'u32'}
-                    onValueChange={(value) => {
-                      const nextBuses = updateCanopenSlaveArray(
-                        canopenConfig.buses,
-                        busIndex,
-                        slaveIndex,
-                        'sdo',
-                        (items) =>
-                          items.map((item, i) =>
-                            i === index ? { ...item, dataType: value as CanopenSdoEntry['dataType'] } : item,
-                          ),
-                      )
-                      updateCanopenStore({ buses: nextBuses })
-                    }}
-                  >
-                    <SelectTrigger withIndicator className={CAN_SELECT_TRIGGER_STYLES} />
-                    <SelectContent className={CAN_SELECT_CONTENT_STYLES}>
-                      {CANOPEN_DATA_TYPES.map((option) => (
-                        <SelectItem key={option} value={option} className={CAN_SELECT_ITEM_STYLES}>
-                          {option}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className='flex flex-col gap-1'>
-                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Access</Label>
-                  <Select
-                    value={entry.access ?? 'rw'}
-                    onValueChange={(value) => {
-                      const nextBuses = updateCanopenSlaveArray(
-                        canopenConfig.buses,
-                        busIndex,
-                        slaveIndex,
-                        'sdo',
-                        (items) =>
-                          items.map((item, i) =>
-                            i === index ? { ...item, access: value as CanopenSdoEntry['access'] } : item,
-                          ),
-                      )
-                      updateCanopenStore({ buses: nextBuses })
-                    }}
-                  >
-                    <SelectTrigger withIndicator className={CAN_SELECT_TRIGGER_STYLES} />
-                    <SelectContent className={CAN_SELECT_CONTENT_STYLES}>
-                      {CANOPEN_ACCESS_OPTIONS.map((option) => (
-                        <SelectItem key={option} value={option} className={CAN_SELECT_ITEM_STYLES}>
-                          {option}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className='flex flex-col gap-1'>
-                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>PLC Addr</Label>
+                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Set Value</Label>
                   <InputWithRef
-                    value={entry.plcAddress ?? ''}
+                    type='number'
+                    value={typeof entry.defaultValue === 'number' ? entry.defaultValue : 0}
                     onChange={(e) => {
                       const nextBuses = updateCanopenSlaveArray(
                         canopenConfig.buses,
                         busIndex,
                         slaveIndex,
                         'sdo',
-                        (items) => items.map((item, i) => (i === index ? { ...item, plcAddress: e.target.value } : item)),
+                        (items) =>
+                          items.map((item, i) =>
+                            i === index ? { ...item, defaultValue: Number(e.target.value) || 0 } : item,
+                          ),
                       )
                       updateCanopenStore({ buses: nextBuses })
                     }}
                     className={inputStyles}
                   />
-                </div>
-                <div className='flex flex-col gap-1'>
-                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Direction</Label>
-                  <Select
-                    value={entry.direction ?? 'input'}
-                    onValueChange={(value) => {
-                      const nextBuses = updateCanopenSlaveArray(
-                        canopenConfig.buses,
-                        busIndex,
-                        slaveIndex,
-                        'sdo',
-                        (items) =>
-                          items.map((item, i) =>
-                            i === index ? { ...item, direction: value as 'input' | 'output' } : item,
-                          ),
-                      )
-                      updateCanopenStore({ buses: nextBuses })
-                    }}
-                  >
-                    <SelectTrigger withIndicator className={CAN_SELECT_TRIGGER_STYLES} />
-                    <SelectContent className={CAN_SELECT_CONTENT_STYLES}>
-                      {CANOPEN_DIRECTION_OPTIONS.map((option) => (
-                        <SelectItem key={option} value={option} className={CAN_SELECT_ITEM_STYLES}>
-                          {option}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
                 </div>
               </div>
             </div>
