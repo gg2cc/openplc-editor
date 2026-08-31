@@ -522,6 +522,10 @@ export interface CanopenSlaveConfig {
   name: string
   enabled?: boolean
   nodeId: number
+  protectionMode?: 'node_guarding' | 'heartbeat_producer'
+  nodeGuardTimeMs?: number
+  nodeGuardLifeFactor?: number
+  heartbeatProducerTimeMs?: number
   odEntries?: CanopenOdEntry[]
   tpdo?: CanopenPdo[]
   rpdo?: CanopenPdo[]

@@ -48,6 +48,10 @@ const defaultCanopenSlave = (): CanopenSlaveConfig => ({
   name: 'slave_1',
   enabled: true,
   nodeId: 1,
+  protectionMode: 'node_guarding',
+  nodeGuardTimeMs: 500,
+  nodeGuardLifeFactor: 3,
+  heartbeatProducerTimeMs: 200,
   odEntries: [],
   tpdo: [],
   rpdo: [],
@@ -1214,6 +1218,42 @@ const CanopenDeviceEditor = () => {
                                 className={inputStyles}
                               />
                             </div>
+                          </div>
+                          <div className='rounded border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-900'>
+                            <div className='mb-3 flex flex-col gap-1'>
+                              <Label className='text-[11px] font-semibold text-neutral-700 dark:text-neutral-300'>Node Protection</Label>
+                              <Select
+                                value={slave.protectionMode ?? 'node_guarding'}
+                                onValueChange={(value) =>
+                                  handleCanopenSlaveChange(busIndex, slaveIndex, {
+                                    protectionMode: value as CanopenSlaveConfig['protectionMode'],
+                                  })
+                                }
+                              >
+                                <SelectTrigger withIndicator className={CAN_SELECT_TRIGGER_STYLES} />
+                                <SelectContent className={CAN_SELECT_CONTENT_STYLES}>
+                                  <SelectItem value='node_guarding' className={CAN_SELECT_ITEM_STYLES}>Node Guarding (节点保护)</SelectItem>
+                                  <SelectItem value='heartbeat_producer' className={CAN_SELECT_ITEM_STYLES}>Heartbeat Producer (心跳生产)</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            {(slave.protectionMode ?? 'node_guarding') === 'node_guarding' ? (
+                              <div className='grid grid-cols-2 gap-3'>
+                                <div className='flex flex-col gap-1.5'>
+                                  <Label className='text-[11px] text-neutral-700 dark:text-neutral-300'>Guard Time (ms)</Label>
+                                  <InputWithRef type='number' min={1} value={slave.nodeGuardTimeMs ?? 1000} onChange={(e) => handleCanopenSlaveChange(busIndex, slaveIndex, { nodeGuardTimeMs: Math.max(1, Number(e.target.value) || 1) })} className={inputStyles} />
+                                </div>
+                                <div className='flex flex-col gap-1.5'>
+                                  <Label className='text-[11px] text-neutral-700 dark:text-neutral-300'>Life Time Factor</Label>
+                                  <InputWithRef type='number' min={1} max={255} value={slave.nodeGuardLifeFactor ?? 3} onChange={(e) => handleCanopenSlaveChange(busIndex, slaveIndex, { nodeGuardLifeFactor: Math.min(255, Math.max(1, Number(e.target.value) || 1)) })} className={inputStyles} />
+                                </div>
+                              </div>
+                            ) : (
+                              <div className='flex flex-col gap-1.5'>
+                                <Label className='text-[11px] text-neutral-700 dark:text-neutral-300'>Producer Time (ms)</Label>
+                                <InputWithRef type='number' min={1} value={slave.heartbeatProducerTimeMs ?? 500} onChange={(e) => handleCanopenSlaveChange(busIndex, slaveIndex, { heartbeatProducerTimeMs: Math.max(1, Number(e.target.value) || 1) })} className={inputStyles} />
+                              </div>
+                            )}
                           </div>
                           <div className='flex items-center justify-between'>
                             <div className='flex items-center gap-2'>

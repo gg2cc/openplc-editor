@@ -163,6 +163,10 @@ describe('generateCanConfig', () => {
                   name: 'servo-1',
                   nodeId: 3,
                   enabled: true,
+                  protectionMode: 'heartbeat_producer',
+                  nodeGuardTimeMs: 500,
+                  nodeGuardLifeFactor: 3,
+                  heartbeatProducerTimeMs: 200,
                   tpdo: [
                     {
                       name: 'tpdo_1',
@@ -200,6 +204,10 @@ describe('generateCanConfig', () => {
     expect(json.buses[0].local_node_id).toBe(127)
     expect(json.buses[0].slaves).toHaveLength(1)
     expect(json.buses[0].slaves[0].node_id).toBe(3)
+    expect(json.buses[0].slaves[0].protection_mode).toBe('heartbeat_producer')
+    expect(json.buses[0].slaves[0].node_guard_time_ms).toBe(500)
+    expect(json.buses[0].slaves[0].node_guard_life_factor).toBe(3)
+    expect(json.buses[0].slaves[0].heartbeat_producer_time_ms).toBe(200)
     expect(json.buses[0].slaves[0].tpdo[0].name).toBe('tpdo_1')
     expect(json.buses[0].slaves[0].tpdo[0].mapping[0].plc_address).toBe('%QW0')
     expect(json.buses[0].slaves[0].rpdo[0].name).toBe('rpdo_1')

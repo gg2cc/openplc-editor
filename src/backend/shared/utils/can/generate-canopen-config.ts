@@ -53,6 +53,10 @@ export function generateCanopenConfig(remoteDevices: PLCRemoteDevice[] | undefin
           name: slave.name,
           node_id: slave.nodeId,
           enabled: slave.enabled ?? true,
+          protection_mode: slave.protectionMode ?? 'node_guarding',
+          node_guard_time_ms: slave.nodeGuardTimeMs ?? 500,
+          node_guard_life_factor: slave.nodeGuardLifeFactor ?? 3,
+          heartbeat_producer_time_ms: slave.heartbeatProducerTimeMs ?? 500,
           od_entries: (slave.odEntries ?? []).map((entry) => ({
             name: entry.name ?? '',
             index: entry.index,
