@@ -67,8 +67,10 @@ export const makeCanopenPdo = (
   direction: 'input' | 'output' = 'output',
   existing: CanopenPdo[] = [],
 ): CanopenPdo => {
-  const baseIndex = direction === 'output' ? 0x1800 : 0x1400
-  const nextIndex = getNextCanopenIndex(existing, baseIndex)
+  const baseIndex = direction === 'output' ? 0x1400 : 0x1800
+  const nextIndex = Array.from({ length: 4 }, (_, offset) => baseIndex + offset).find(
+    (index) => !existing.some((pdo) => pdo.index === index),
+  ) ?? baseIndex
 
   return {
     name: direction === 'output' ? `tpdo_${existing.length + 1}` : `rpdo_${existing.length + 1}`,
@@ -76,6 +78,15 @@ export const makeCanopenPdo = (
     subIndex: 0,
     mapping: [makeCanopenPdoMapping(direction)],
   }
+}
+
+export const formatCanopenHex = (value: number | undefined, width = 4) =>
+  `0x${Math.max(0, value ?? 0).toString(16).toUpperCase().padStart(width, '0')}`
+
+export const parseCanopenHex = (value: string) => {
+  const normalized = value.trim().replace(/^0x/i, '')
+  if (normalized === '' || !/^[0-9a-f]+$/i.test(normalized)) return 0
+  return Number.parseInt(normalized, 16)
 }
 
 export const makeCanopenSdoEntry = (existing: CanopenSdoEntry[] = []): CanopenSdoEntry => {

@@ -17,11 +17,13 @@ import { Label } from '../../../../../_atoms/label'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '../../../../../_atoms/select'
 import { ToggleSwitch } from '../../../../../_atoms/toggle-switch'
 import {
+  formatCanopenHex,
   getNextCanopenBusNumber,
   makeCanopenOdEntry,
   makeCanopenPdo,
   makeCanopenPdoMapping,
   makeCanopenSdoEntry,
+  parseCanopenHex,
 } from './canopen-utils'
 
 const CANOPEN_BITRATE_OPTIONS = [
@@ -84,6 +86,8 @@ const defaultCanopenConfig = (): CanopenConfig => ({
 const CANOPEN_DATA_TYPES = ['bool', 'u8', 'i8', 'u16', 'i16', 'u32', 'i32', 'u64', 'i64', 'f32', 'f64'] as const
 const CANOPEN_ACCESS_OPTIONS = ['ro', 'wo', 'rw', 'rwr', 'const'] as const
 const CANOPEN_DIRECTION_OPTIONS = ['input', 'output'] as const
+const CANOPEN_MAX_PDOS_PER_TYPE = 4
+const CANOPEN_MAX_MAPPINGS_PER_PDO = 8
 
 
 const updateCanopenBus = (buses: CanopenBusConfig[], index: number, updates: Partial<CanopenBusConfig>): CanopenBusConfig[] => {
@@ -273,7 +277,9 @@ const CanopenDeviceEditor = () => {
   const renderPdoSection = (busIndex: number, slaveIndex: number, pdoType: 'tpdo' | 'rpdo') => {
     const slave = canopenConfig.buses[busIndex]?.slaves?.[slaveIndex]
     const pdos: CanopenPdo[] = slave?.[pdoType] ?? []
-    const title = pdoType === 'tpdo' ? 'TPDO' : 'RPDO'
+    const title = pdoType === 'tpdo' ? 'TPDO(主站到从站)' : 'RPDO(从站到主站)'
+    const pdoLimitReached = pdos.length >= CANOPEN_MAX_PDOS_PER_TYPE
+    const pdoLimitExceeded = pdos.length > CANOPEN_MAX_PDOS_PER_TYPE
 
     return (
       <div className='rounded border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-900'>
@@ -284,6 +290,7 @@ const CanopenDeviceEditor = () => {
           <button
             type='button'
             onClick={() => {
+              if (pdoLimitReached) return
               const nextBuses = updateCanopenSlaveArray(
                 canopenConfig.buses,
                 busIndex,
@@ -293,11 +300,18 @@ const CanopenDeviceEditor = () => {
               )
               updateCanopenStore({ buses: nextBuses })
             }}
-            className='rounded bg-brand px-2 py-1 text-[10px] font-medium text-white hover:bg-brand-medium-dark'
+            disabled={pdoLimitReached}
+            className='rounded bg-brand px-2 py-1 text-[10px] font-medium text-white hover:bg-brand-medium-dark disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-brand'
           >
             Add {title}
           </button>
         </div>
+
+        {pdoLimitExceeded && (
+          <div className='mb-3 rounded border border-amber-300 bg-amber-50 p-2 text-[11px] text-amber-800 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-300'>
+            This configuration has {pdos.length} {title} entries. CANopen runtime supports a maximum of {CANOPEN_MAX_PDOS_PER_TYPE}; delete the extra entries before starting the runtime.
+          </div>
+        )}
 
         <div className='space-y-3'>
           {pdos.length === 0 && (
@@ -306,7 +320,12 @@ const CanopenDeviceEditor = () => {
             </div>
           )}
 
-          {pdos.map((pdo, pdoIndex) => (
+          {pdos.map((pdo, pdoIndex) => {
+            const mappings = pdo.mapping ?? []
+            const mappingLimitReached = mappings.length >= CANOPEN_MAX_MAPPINGS_PER_PDO
+            const mappingLimitExceeded = mappings.length > CANOPEN_MAX_MAPPINGS_PER_PDO
+
+            return (
             <div key={`${pdoType}-${pdoIndex}`} className='rounded border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-950'>
               <div className='mb-2 flex items-center justify-between gap-2'>
                 <span className='text-[11px] font-medium text-neutral-700 dark:text-neutral-300'>
@@ -334,8 +353,8 @@ const CanopenDeviceEditor = () => {
                 <div className='flex flex-col gap-1'>
                   <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Index</Label>
                   <InputWithRef
-                    type='number'
-                    value={pdo.index ?? 0}
+                    inputMode='text'
+                    value={formatCanopenHex(pdo.index)}
                     onChange={(e) => {
                       const nextBuses = updateCanopenPdo(
                         canopenConfig.buses,
@@ -344,7 +363,7 @@ const CanopenDeviceEditor = () => {
                         pdoType,
                         pdoIndex,
                         {
-                          index: Number(e.target.value) || 0,
+                          index: parseCanopenHex(e.target.value),
                         },
                       )
                       updateCanopenStore({ buses: nextBuses })
@@ -403,6 +422,7 @@ const CanopenDeviceEditor = () => {
                   <button
                     type='button'
                     onClick={() => {
+                      if (mappingLimitReached) return
                       const nextBuses = updateCanopenPdo(
                         canopenConfig.buses,
                         busIndex,
@@ -410,24 +430,31 @@ const CanopenDeviceEditor = () => {
                         pdoType,
                         pdoIndex,
                         {
-                          mapping: [...(pdo.mapping ?? []), makeCanopenPdoMapping(pdoType === 'tpdo' ? 'output' : 'input', pdo.mapping ?? [])],
+                          mapping: [...mappings, makeCanopenPdoMapping(pdoType === 'tpdo' ? 'output' : 'input', mappings)],
                         },
                       )
                       updateCanopenStore({ buses: nextBuses })
                     }}
-                    className='rounded bg-neutral-800 px-2 py-1 text-[10px] font-medium text-white hover:bg-neutral-700 dark:bg-neutral-700 dark:hover:bg-neutral-600'
+                    disabled={mappingLimitReached}
+                    className='rounded bg-neutral-800 px-2 py-1 text-[10px] font-medium text-white hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-neutral-800 dark:bg-neutral-700 dark:hover:bg-neutral-600 dark:disabled:hover:bg-neutral-700'
                   >
                     Add Mapping
                   </button>
                 </div>
 
-                {(pdo.mapping ?? []).length === 0 && (
+                {mappingLimitExceeded && (
+                  <div className='mb-2 rounded border border-amber-300 bg-amber-50 p-2 text-[11px] text-amber-800 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-300'>
+                    This PDO has {mappings.length} mappings. CANopen runtime supports a maximum of {CANOPEN_MAX_MAPPINGS_PER_PDO}; delete the extra mappings before starting the runtime.
+                  </div>
+                )}
+
+                {mappings.length === 0 && (
                   <div className='rounded border border-dashed border-neutral-300 p-2 text-[11px] text-neutral-500 dark:border-neutral-700 dark:text-neutral-400'>
                     No mapping entries.
                   </div>
                 )}
 
-                {(pdo.mapping ?? []).map((mapping, mappingIndex) => (
+                  {mappings.map((mapping, mappingIndex) => (
                   <div key={`${title}-mapping-${mappingIndex}`} className='rounded border border-neutral-200 bg-neutral-50 p-2 dark:border-neutral-800 dark:bg-neutral-950'>
                     <div className='mb-2 flex items-center justify-between'>
                       <span className='text-[10px] font-medium text-neutral-700 dark:text-neutral-300'>
@@ -479,8 +506,8 @@ const CanopenDeviceEditor = () => {
                       <div className='flex flex-col gap-1'>
                         <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Index</Label>
                         <InputWithRef
-                          type='number'
-                          value={mapping.index ?? 0}
+                          inputMode='text'
+                          value={formatCanopenHex(mapping.index)}
                           onChange={(e) => {
                             const nextBuses = updateCanopenPdoMapping(
                               canopenConfig.buses,
@@ -490,7 +517,7 @@ const CanopenDeviceEditor = () => {
                               pdoIndex,
                               mappingIndex,
                               {
-                                index: Number(e.target.value) || 0,
+                                index: parseCanopenHex(e.target.value),
                               },
                             )
                             updateCanopenStore({ buses: nextBuses })
@@ -567,20 +594,7 @@ const CanopenDeviceEditor = () => {
                         <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Direction</Label>
                         <Select
                           value={mapping.direction ?? (pdoType === 'tpdo' ? 'output' : 'input')}
-                          onValueChange={(value) => {
-                            const nextBuses = updateCanopenPdoMapping(
-                              canopenConfig.buses,
-                              busIndex,
-                              slaveIndex,
-                              pdoType,
-                              pdoIndex,
-                              mappingIndex,
-                              {
-                                direction: value as 'input' | 'output',
-                              },
-                            )
-                            updateCanopenStore({ buses: nextBuses })
-                          }}
+                          disabled
                         >
                           <SelectTrigger withIndicator className={CAN_SELECT_TRIGGER_STYLES} />
                           <SelectContent className={CAN_SELECT_CONTENT_STYLES}>
@@ -594,10 +608,10 @@ const CanopenDeviceEditor = () => {
                       </div>
                     </div>
                   </div>
-                ))}
+                  ))}
               </div>
             </div>
-          ))}
+              )})}
         </div>
       </div>
     )
@@ -709,15 +723,15 @@ const CanopenDeviceEditor = () => {
                 <div className='flex flex-col gap-1'>
                   <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Index</Label>
                   <InputWithRef
-                    type='number'
-                    value={entry.index ?? 0}
+                    inputMode='text'
+                    value={formatCanopenHex(entry.index)}
                     onChange={(e) => {
                       const nextBuses = updateCanopenSlaveArray(
                         canopenConfig.buses,
                         busIndex,
                         slaveIndex,
                         'sdo',
-                        (items) => items.map((item, i) => (i === index ? { ...item, index: Number(e.target.value) || 0 } : item)),
+                        (items) => items.map((item, i) => (i === index ? { ...item, index: parseCanopenHex(e.target.value) } : item)),
                       )
                       updateCanopenStore({ buses: nextBuses })
                     }}
@@ -849,15 +863,15 @@ const CanopenDeviceEditor = () => {
                 <div className='flex flex-col gap-1'>
                   <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Index</Label>
                   <InputWithRef
-                    type='number'
-                    value={entry.index ?? 0}
+                    inputMode='text'
+                    value={formatCanopenHex(entry.index)}
                     onChange={(e) => {
                       const nextBuses = updateCanopenSlaveArray(
                         canopenConfig.buses,
                         busIndex,
                         slaveIndex,
                         'odEntries',
-                        (items) => items.map((item, i) => (i === index ? { ...item, index: Number(e.target.value) || 0 } : item)),
+                        (items) => items.map((item, i) => (i === index ? { ...item, index: parseCanopenHex(e.target.value) } : item)),
                       )
                       updateCanopenStore({ buses: nextBuses })
                     }}
