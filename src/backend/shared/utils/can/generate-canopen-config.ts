@@ -25,7 +25,6 @@ export function generateCanopenConfig(remoteDevices: PLCRemoteDevice[] | undefin
               name: bus.name || 'main_slave',
               nodeId: fallbackSlaveNodeId,
               enabled: true,
-              odEntries: [],
               tpdo: [],
               rpdo: [],
               sdo: [],
@@ -57,15 +56,6 @@ export function generateCanopenConfig(remoteDevices: PLCRemoteDevice[] | undefin
           node_guard_time_ms: slave.nodeGuardTimeMs ?? 500,
           node_guard_life_factor: slave.nodeGuardLifeFactor ?? 3,
           heartbeat_producer_time_ms: slave.heartbeatProducerTimeMs ?? 500,
-          od_entries: (slave.odEntries ?? []).map((entry) => ({
-            name: entry.name ?? '',
-            index: entry.index,
-            sub_index: entry.subIndex ?? 0,
-            data_type: entry.dataType ?? 'u32',
-            access: entry.access ?? 'rw',
-            default_value: entry.defaultValue ?? 0,
-            description: entry.description ?? '',
-          })),
           tpdo: (slave.tpdo ?? []).map((pdo) => ({
             name: pdo.name ?? '',
             index: pdo.index,

@@ -1,7 +1,6 @@
 import type { PLCRemoteDevice } from '../../../types/PLC/open-plc'
 import {
   getNextCanopenBusNumber,
-  makeCanopenOdEntry,
   makeCanopenPdo,
   makeCanopenPdoMapping,
   makeCanopenSdoEntry,
@@ -10,7 +9,7 @@ import { generateCanConfig } from '../generate-can-config'
 import { generateCanopenConfig } from '../generate-canopen-config'
 
 describe('generateCanConfig', () => {
-  it('auto-increments CANopen bus, OD, PDO, and SDO numbering from the highest existing values', () => {
+  it('auto-increments CANopen bus, PDO, and SDO numbering from the highest existing values', () => {
     expect(
       getNextCanopenBusNumber([
         { name: 'bus2', interface: 'can2', bitrate: 500000, enabled: true, localNodeId: 127, slaves: [] },
@@ -18,13 +17,7 @@ describe('generateCanConfig', () => {
       ]),
     ).toBe(6)
 
-    const firstOd = makeCanopenOdEntry()
-    expect(firstOd.index).toBe(0x1000)
-    expect(firstOd.subIndex).toBe(0)
-    expect(firstOd.defaultValue).toBe(0)
 
-    const odEntry = makeCanopenOdEntry([{ index: 0x1000 }, { index: 0x1300 }])
-    expect(odEntry.index).toBe(0x1310)
 
     const firstTpdo = makeCanopenPdo('output')
     expect(firstTpdo.index).toBe(0x1400)
@@ -277,16 +270,6 @@ describe('generateCanConfig', () => {
                   name: 'slave_1',
                   enabled: true,
                   nodeId: 1,
-                  odEntries: [
-                    {
-                      name: 'deviceType',
-                      index: 0x1000,
-                      subIndex: 0,
-                      dataType: 'u32',
-                      access: 'ro',
-                      defaultValue: 0,
-                    },
-                  ],
                   tpdo: [
                     {
                       index: 0x1800,
@@ -340,10 +323,6 @@ describe('generateCanConfig', () => {
     expect(output).toContain('"sample_point": 0.875')
     expect(output).toContain('"restart_ms": 100')
     expect(output).toContain('"triple_sampling": false')
-    expect(output).toContain('"od_entries"')
-    expect(output).toContain('"index": 4096')
-    expect(output).toContain('"data_type": "u32"')
-    expect(output).toContain('"access": "ro"')
     expect(output).toContain('"mapping"')
     expect(output).toContain('"plc_address": "%QW0"')
     expect(output).toContain('"direction": "output"')
@@ -439,7 +418,7 @@ describe('generateCanConfig', () => {
     expect(output).not.toContain('"binding"')
   })
 
-  it('matches a multi-bus CANopen profile with OD entries and bus metadata from the editor form', () => {
+  it('matches a multi-bus CANopen profile with bus metadata from the editor form', () => {
     const remoteDevices: PLCRemoteDevice[] = [
       {
         name: 'canopen-test',
@@ -463,10 +442,6 @@ describe('generateCanConfig', () => {
                   name: 'slave_1',
                   enabled: true,
                   nodeId: 1,
-                  odEntries: [
-                    { name: 'entry_1', index: 0x1000, subIndex: 0, dataType: 'u32', access: 'ro', defaultValue: 1 },
-                    { name: 'entry_2', index: 0x1001, subIndex: 0, dataType: 'u32', access: 'rw', defaultValue: 2 },
-                  ],
                   tpdo: [
                     {
                       index: 0x1800,
@@ -509,15 +484,11 @@ describe('generateCanConfig', () => {
     expect(json.buses[0].triple_sampling).toBe(false)
     expect(json.buses[0].heartbeat_ms).toBe(1000)
     expect(json.buses[0].sync_period_ms).toBe(1000)
-    expect(json.buses[0].slaves[0].od_entries).toHaveLength(2)
-    expect(json.buses[0].slaves[0].od_entries[0].name).toBe('entry_1')
-    expect(json.buses[0].slaves[0].od_entries[0].index).toBe(4096)
     expect(json.buses[0].slaves[0].tpdo[0].mapping[0].plc_address).toBe('%QW0')
     expect(json.buses[0].slaves[0].rpdo[0].mapping[0].plc_address).toBe('%IW0')
     expect(json.buses[0].slaves[0].sdo[0].default_value).toBe(0)
     expect(output).toContain('"can0"')
     expect(output).toContain('"bus0"')
-    expect(output).toContain('"entry_1"')
     expect(output).toContain('"%QW0"')
     expect(output).toContain('"%IW0"')
   })

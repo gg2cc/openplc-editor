@@ -2,7 +2,6 @@ import * as Tabs from '@radix-ui/react-tabs'
 import type {
   CanopenBusConfig,
   CanopenConfig,
-  CanopenOdEntry,
   CanopenPdo,
   CanopenPdoMapping,
   CanopenSdoEntry,
@@ -20,7 +19,6 @@ import {
   formatCanopenHex,
   getCanopenPlcAddressForDataType,
   getNextCanopenBusNumber,
-  makeCanopenOdEntry,
   makeCanopenPdo,
   makeCanopenPdoMapping,
   makeCanopenSdoEntry,
@@ -55,7 +53,6 @@ const defaultCanopenSlave = (): CanopenSlaveConfig => ({
   nodeGuardTimeMs: 500,
   nodeGuardLifeFactor: 3,
   heartbeatProducerTimeMs: 200,
-  odEntries: [],
   tpdo: [],
   rpdo: [],
   sdo: [],
@@ -85,7 +82,6 @@ const defaultCanopenConfig = (): CanopenConfig => ({
 })
 
 const CANOPEN_DATA_TYPES = ['bool', 'u8', 'i8', 'u16', 'i16', 'u32', 'i32', 'u64', 'i64', 'f32', 'f64'] as const
-const CANOPEN_ACCESS_OPTIONS = ['ro', 'wo', 'rw', 'rwr', 'const'] as const
 const CANOPEN_DIRECTION_OPTIONS = ['input', 'output'] as const
 const CANOPEN_MAX_PDOS_PER_TYPE = 4
 const CANOPEN_MAX_MAPPINGS_PER_PDO = 8
@@ -97,10 +93,9 @@ const updateCanopenBus = (buses: CanopenBusConfig[], index: number, updates: Par
   return next
 }
 
-type CanopenSlaveArrayKey = 'odEntries' | 'tpdo' | 'rpdo' | 'sdo'
+type CanopenSlaveArrayKey = 'tpdo' | 'rpdo' | 'sdo'
 
 type CanopenSlaveArrayMap = {
-  odEntries: CanopenOdEntry[]
   tpdo: CanopenPdo[]
   rpdo: CanopenPdo[]
   sdo: CanopenSdoEntry[]
@@ -121,9 +116,6 @@ const updateCanopenSlaveArray = <K extends CanopenSlaveArrayKey>(
   const updatedItems = updater(items)
 
   switch (key) {
-    case 'odEntries':
-      slave.odEntries = updatedItems as CanopenOdEntry[]
-      break
     case 'tpdo':
       slave.tpdo = updatedItems as CanopenPdo[]
       break
@@ -437,7 +429,7 @@ const CanopenDeviceEditor = () => {
                       updateCanopenStore({ buses: nextBuses })
                     }}
                     disabled={mappingLimitReached}
-                    className='rounded bg-neutral-800 px-2 py-1 text-[10px] font-medium text-white hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-neutral-800 dark:bg-neutral-700 dark:hover:bg-neutral-600 dark:disabled:hover:bg-neutral-700'
+                    className='rounded bg-brand px-2 py-1 text-[10px] font-medium text-white hover:bg-brand-medium-dark disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-brand'
                   >
                     Add Mapping
                   </button>
@@ -799,6 +791,7 @@ const CanopenDeviceEditor = () => {
     )
   }
 
+  /*
   const renderOdSection = (busIndex: number, slaveIndex: number) => {
     const slave = canopenConfig.buses[busIndex]?.slaves?.[slaveIndex]
     const entries: CanopenOdEntry[] = slave?.odEntries ?? []
@@ -992,6 +985,7 @@ const CanopenDeviceEditor = () => {
     )
   }
 
+  */
   return (
     <div className='flex h-full w-full flex-col overflow-y-auto bg-neutral-100 p-6 dark:bg-neutral-900'>
       <div className='mb-6 flex items-center justify-between border-b border-neutral-200 pb-4 dark:border-neutral-800'>
@@ -1306,7 +1300,6 @@ const CanopenDeviceEditor = () => {
                               PDO/SDO and OD bindings for this slave are scoped to node {slave.nodeId}.
                             </div>
 
-                            {renderOdSection(busIndex, slaveIndex)}
                             {renderPdoSection(busIndex, slaveIndex, 'tpdo')}
                             {renderPdoSection(busIndex, slaveIndex, 'rpdo')}
                             {renderSdoSection(busIndex, slaveIndex)}

@@ -1,6 +1,5 @@
 import type {
   CanopenBusConfig,
-  CanopenOdEntry,
   CanopenPdo,
   CanopenPdoMapping,
   CanopenSdoEntry,
@@ -48,20 +47,6 @@ export const getCanopenPlcAddressForDataType = (
   const prefix = direction === 'output' ? 'Q' : 'I'
 
   return `%${prefix}${width}${index}${width === 'X' ? `.${bit ?? '0'}` : ''}`
-}
-
-export const makeCanopenOdEntry = (existing: CanopenOdEntry[] = []): CanopenOdEntry => {
-  const nextIndex = getNextCanopenIndex(existing, 0x1000)
-
-  return {
-    name: `entry_${existing.length + 1}`,
-    index: nextIndex,
-    subIndex: 0,
-    dataType: 'u32',
-    access: 'rw',
-    defaultValue: 0,
-    description: '',
-  }
 }
 
 export const makeCanopenPdoMapping = (

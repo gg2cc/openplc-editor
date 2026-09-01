@@ -836,16 +836,6 @@ const CanopenSdoEntrySchema = z.object({
   description: z.string().optional(),
 })
 
-const CanopenOdEntrySchema = z.object({
-  name: z.string().optional(),
-  index: z.number().int().min(0).max(0xffff),
-  subIndex: z.number().int().min(0).max(0xff).optional(),
-  dataType: z.enum(['bool', 'i8', 'u8', 'i16', 'u16', 'i32', 'u32', 'i64', 'u64', 'f32', 'f64', 'string', 'bytes']).optional(),
-  access: z.enum(['ro', 'wo', 'rw', 'rwr', 'const']).optional(),
-  defaultValue: z.union([z.number(), z.string(), z.boolean(), z.null()]).optional(),
-  description: z.string().optional(),
-})
-
 const CanopenSlaveConfigSchema = z.object({
   name: z.string(),
   enabled: z.boolean().optional(),
@@ -854,7 +844,6 @@ const CanopenSlaveConfigSchema = z.object({
   nodeGuardTimeMs: z.number().int().min(1).max(0xffffffff).optional(),
   nodeGuardLifeFactor: z.number().int().min(1).max(255).optional(),
   heartbeatProducerTimeMs: z.number().int().min(1).max(0xffffffff).optional(),
-  odEntries: z.array(CanopenOdEntrySchema).optional(),
   tpdo: z.array(CanopenPdoSchema).optional(),
   rpdo: z.array(CanopenPdoSchema).optional(),
   sdo: z.array(CanopenSdoEntrySchema).optional(),

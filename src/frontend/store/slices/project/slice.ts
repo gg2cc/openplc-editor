@@ -1675,7 +1675,6 @@ const createProjectSlice: StateCreator<ProjectSliceRoot, [], [], ProjectSlice> =
                       name: 'slave_1',
                       enabled: true,
                       nodeId: 1,
-                      odEntries: [],
                       tpdo: [],
                       rpdo: [],
                       sdo: [],

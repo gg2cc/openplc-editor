@@ -506,29 +506,6 @@ export interface CanopenSdoEntry {
   description?: string
 }
 
-export interface CanopenOdEntry {
-  name?: string
-  index: number
-  subIndex?: number
-  dataType?:
-    | 'bool'
-    | 'i8'
-    | 'u8'
-    | 'i16'
-    | 'u16'
-    | 'i32'
-    | 'u32'
-    | 'i64'
-    | 'u64'
-    | 'f32'
-    | 'f64'
-    | 'string'
-    | 'bytes'
-  access?: 'ro' | 'wo' | 'rw' | 'rwr' | 'const'
-  defaultValue?: number | string | boolean | null
-  description?: string
-}
-
 export interface CanopenSlaveConfig {
   name: string
   enabled?: boolean
@@ -537,7 +514,6 @@ export interface CanopenSlaveConfig {
   nodeGuardTimeMs?: number
   nodeGuardLifeFactor?: number
   heartbeatProducerTimeMs?: number
-  odEntries?: CanopenOdEntry[]
   tpdo?: CanopenPdo[]
   rpdo?: CanopenPdo[]
   sdo?: CanopenSdoEntry[]
