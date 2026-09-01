@@ -48,6 +48,8 @@ export function generateCanopenConfig(remoteDevices: PLCRemoteDevice[] | undefin
         triple_sampling: bus.tripleSampling ?? false,
         heartbeat_ms: bus.heartbeatMs ?? 1000,
         sync_period_ms: bus.syncPeriodMs ?? 0,
+        bus_status_plc_address: bus.busStatusPlcAddress ?? null,
+        master_status_plc_address: bus.masterStatusPlcAddress ?? null,
         slaves: slaves.filter((slave) => slave.enabled !== false).map((slave) => ({
           name: slave.name,
           node_id: slave.nodeId,
@@ -56,6 +58,7 @@ export function generateCanopenConfig(remoteDevices: PLCRemoteDevice[] | undefin
           node_guard_time_ms: slave.nodeGuardTimeMs ?? 500,
           node_guard_life_factor: slave.nodeGuardLifeFactor ?? 3,
           heartbeat_producer_time_ms: slave.heartbeatProducerTimeMs ?? 500,
+          status_plc_address: slave.statusPlcAddress ?? null,
           tpdo: (slave.tpdo ?? []).map((pdo) => ({
             name: pdo.name ?? '',
             index: pdo.index,

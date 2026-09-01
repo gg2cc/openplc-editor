@@ -1670,11 +1670,14 @@ const createProjectSlice: StateCreator<ProjectSliceRoot, [], [], ProjectSlice> =
                   localNodeId: 127,
                   bitrate: 500000,
                   heartbeatMs: 1000,
+                      busStatusPlcAddress: '%IB0',
+                      masterStatusPlcAddress: '%IB1',
                   slaves: [
                     {
                       name: 'slave_1',
                       enabled: true,
                       nodeId: 1,
+                      statusPlcAddress: '%IB2',
                       tpdo: [],
                       rpdo: [],
                       sdo: [],

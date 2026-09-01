@@ -19,6 +19,7 @@ import {
   formatCanopenHex,
   getCanopenPlcAddressForDataType,
   getNextCanopenBusNumber,
+  getNextCanopenStatusAddress,
   makeCanopenPdo,
   makeCanopenPdoMapping,
   makeCanopenSdoEntry,
@@ -53,6 +54,7 @@ const defaultCanopenSlave = (): CanopenSlaveConfig => ({
   nodeGuardTimeMs: 500,
   nodeGuardLifeFactor: 3,
   heartbeatProducerTimeMs: 200,
+  statusPlcAddress: '%IB2',
   tpdo: [],
   rpdo: [],
   sdo: [],
@@ -61,6 +63,11 @@ const defaultCanopenSlave = (): CanopenSlaveConfig => ({
 
 const defaultCanopenBus = (buses: CanopenBusConfig[] = []): CanopenBusConfig => {
   const nextBusNumber = getNextCanopenBusNumber(buses)
+  const busStatusAddress = getNextCanopenStatusAddress(buses)
+  const masterStatusAddress = getNextCanopenStatusAddress([
+    ...buses,
+    { busStatusPlcAddress: busStatusAddress } as CanopenBusConfig,
+  ])
   return {
     name: `bus${nextBusNumber}`,
     enabled: true,
@@ -73,7 +80,12 @@ const defaultCanopenBus = (buses: CanopenBusConfig[] = []): CanopenBusConfig => 
     tripleSampling: false,
     heartbeatMs: 1000,
     syncPeriodMs: 0,
-    slaves: [defaultCanopenSlave()],
+    busStatusPlcAddress: busStatusAddress,
+    masterStatusPlcAddress: masterStatusAddress,
+    slaves: [{ ...defaultCanopenSlave(), statusPlcAddress: getNextCanopenStatusAddress([
+      ...buses,
+      { busStatusPlcAddress: busStatusAddress, masterStatusPlcAddress: masterStatusAddress } as CanopenBusConfig,
+    ]) }],
   }
 }
 
@@ -231,7 +243,12 @@ const CanopenDeviceEditor = () => {
       const nextBuses = [...canopenConfig.buses]
       const next = [...(nextBuses[busIndex]?.slaves ?? [])]
       const nextNodeId = next.length > 0 ? Math.max(...next.map((slave) => slave.nodeId)) + 1 : 1
-      next.push({ ...defaultCanopenSlave(), name: `slave_${next.length + 1}`, nodeId: nextNodeId })
+      next.push({
+        ...defaultCanopenSlave(),
+        name: `slave_${next.length + 1}`,
+        nodeId: nextNodeId,
+        statusPlcAddress: getNextCanopenStatusAddress(canopenConfig.buses),
+      })
       nextBuses[busIndex] = { ...nextBuses[busIndex], slaves: next }
       setActiveSlaveTab((prev) => ({ ...prev, [busIndex]: String(next.length - 1) }))
       updateCanopenStore({ buses: nextBuses })
@@ -1182,6 +1199,24 @@ const CanopenDeviceEditor = () => {
                         className={inputStyles}
                       />
                     </div>
+                    <div className='flex flex-col gap-1.5'>
+                      <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Bus Status PLC Address</Label>
+                      <InputWithRef
+                        value={bus.busStatusPlcAddress ?? ''}
+                        onChange={(e) => handleCanopenBusChange(busIndex, { busStatusPlcAddress: e.target.value })}
+                        placeholder='%IB0'
+                        className={inputStyles}
+                      />
+                    </div>
+                    <div className='flex flex-col gap-1.5'>
+                      <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Master Status PLC Address</Label>
+                      <InputWithRef
+                        value={bus.masterStatusPlcAddress ?? ''}
+                        onChange={(e) => handleCanopenBusChange(busIndex, { masterStatusPlcAddress: e.target.value })}
+                        placeholder='%IB1'
+                        className={inputStyles}
+                      />
+                    </div>
                   </div>
 
                   <div className='mt-5 rounded border border-neutral-200 bg-white p-3 dark:border-neutral-800 dark:bg-neutral-950'>
@@ -1237,6 +1272,15 @@ const CanopenDeviceEditor = () => {
                                     nodeId: Math.min(127, Math.max(1, Number(e.target.value) || 1)),
                                   })
                                 }
+                                className={inputStyles}
+                              />
+                            </div>
+                            <div className='flex flex-col gap-1.5'>
+                              <Label className='text-[11px] text-neutral-700 dark:text-neutral-300'>Slave Status PLC Address</Label>
+                              <InputWithRef
+                                value={slave.statusPlcAddress ?? ''}
+                                onChange={(e) => handleCanopenSlaveChange(busIndex, slaveIndex, { statusPlcAddress: e.target.value })}
+                                placeholder='%IB2'
                                 className={inputStyles}
                               />
                             </div>

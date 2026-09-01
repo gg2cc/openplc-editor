@@ -49,6 +49,20 @@ export const getCanopenPlcAddressForDataType = (
   return `%${prefix}${width}${index}${width === 'X' ? `.${bit ?? '0'}` : ''}`
 }
 
+export const getNextCanopenStatusAddress = (buses: CanopenBusConfig[] = []) => {
+  const usedIndexes = buses.flatMap((bus) => [
+    bus.busStatusPlcAddress,
+    bus.masterStatusPlcAddress,
+    ...(bus.slaves ?? []).map((slave) => slave.statusPlcAddress),
+  ]).map((address) => {
+    const match = /^%IB(\d+)$/i.exec(address ?? '')
+    return match ? Number.parseInt(match[1], 10) : -1
+  }).filter((index) => index >= 0)
+
+  const nextIndex = usedIndexes.length > 0 ? Math.max(...usedIndexes) + 1 : 0
+  return `%IB${nextIndex}`
+}
+
 export const makeCanopenPdoMapping = (
   direction: 'input' | 'output' = 'output',
   existing: CanopenPdoMapping[] = [],

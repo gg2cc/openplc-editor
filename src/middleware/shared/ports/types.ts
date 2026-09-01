@@ -514,6 +514,7 @@ export interface CanopenSlaveConfig {
   nodeGuardTimeMs?: number
   nodeGuardLifeFactor?: number
   heartbeatProducerTimeMs?: number
+  statusPlcAddress?: string
   tpdo?: CanopenPdo[]
   rpdo?: CanopenPdo[]
   sdo?: CanopenSdoEntry[]
@@ -531,6 +532,8 @@ export interface CanopenBusConfig {
   tripleSampling?: boolean
   heartbeatMs?: number
   syncPeriodMs?: number
+  busStatusPlcAddress?: string
+  masterStatusPlcAddress?: string
   slaves?: CanopenSlaveConfig[]
 }
 

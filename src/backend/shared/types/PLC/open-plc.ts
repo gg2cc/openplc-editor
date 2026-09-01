@@ -844,6 +844,7 @@ const CanopenSlaveConfigSchema = z.object({
   nodeGuardTimeMs: z.number().int().min(1).max(0xffffffff).optional(),
   nodeGuardLifeFactor: z.number().int().min(1).max(255).optional(),
   heartbeatProducerTimeMs: z.number().int().min(1).max(0xffffffff).optional(),
+  statusPlcAddress: z.string().regex(/^%IB\d+$/i).optional(),
   tpdo: z.array(CanopenPdoSchema).optional(),
   rpdo: z.array(CanopenPdoSchema).optional(),
   sdo: z.array(CanopenSdoEntrySchema).optional(),
@@ -861,6 +862,8 @@ const CanopenBusConfigSchema = z.object({
   tripleSampling: z.boolean().optional(),
   heartbeatMs: z.number().int().min(0).max(60000).optional(),
   syncPeriodMs: z.number().int().min(0).max(60000).optional(),
+  busStatusPlcAddress: z.string().regex(/^%IB\d+$/i).optional(),
+  masterStatusPlcAddress: z.string().regex(/^%IB\d+$/i).optional(),
   slaves: z.array(CanopenSlaveConfigSchema).optional(),
 })
 
