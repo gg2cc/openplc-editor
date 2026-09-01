@@ -813,7 +813,7 @@ const CanopenCommunicationBindingSchema = z.object({
 const CanopenPdoMappingSchema = z.object({
   index: z.number().int().min(0).max(0xffff),
   subIndex: z.number().int().min(0).max(0xff).optional(),
-  bitLength: z.number().int().min(1).max(64).optional(),
+  dataType: z.enum(['bool', 'i8', 'u8', 'i16', 'u16', 'i32', 'u32', 'i64', 'u64', 'f32', 'f64']).optional(),
   name: z.string().optional(),
   plcAddress: z.string().optional(),
   direction: z.enum(['input', 'output']).optional(),

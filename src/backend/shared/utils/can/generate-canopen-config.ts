@@ -73,7 +73,7 @@ export function generateCanopenConfig(remoteDevices: PLCRemoteDevice[] | undefin
             mapping: (pdo.mapping ?? []).map((entry) => ({
               index: entry.index,
               sub_index: entry.subIndex ?? 0,
-              bit_length: entry.bitLength ?? 8,
+              data_type: entry.dataType ?? 'u16',
               name: entry.name ?? '',
               plc_address: entry.plcAddress ?? null,
               direction: entry.direction ?? null,
@@ -86,7 +86,7 @@ export function generateCanopenConfig(remoteDevices: PLCRemoteDevice[] | undefin
             mapping: (pdo.mapping ?? []).map((entry) => ({
               index: entry.index,
               sub_index: entry.subIndex ?? 0,
-              bit_length: entry.bitLength ?? 8,
+              data_type: entry.dataType ?? 'u16',
               name: entry.name ?? '',
               plc_address: entry.plcAddress ?? null,
               direction: entry.direction ?? null,

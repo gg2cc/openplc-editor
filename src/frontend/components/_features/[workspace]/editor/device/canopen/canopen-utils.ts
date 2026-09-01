@@ -33,6 +33,23 @@ export const getNextPlcWordAddress = (direction: 'input' | 'output', existing: A
   return direction === 'output' ? `%QW${nextWord}` : `%IW${nextWord}`
 }
 
+export const getCanopenPlcAddressForDataType = (
+  direction: 'input' | 'output',
+  dataType: Exclude<CanopenPdoMapping['dataType'], undefined>,
+  currentAddress?: string,
+) => {
+  const addressMatch = /^%[IQ](X|B|W|D|L)(\d+)(?:\.(\d+))?$/i.exec(currentAddress ?? '')
+  const index = addressMatch?.[2] ?? '0'
+  const bit = addressMatch?.[3]
+  const width = dataType === 'bool' ? 'X' :
+    dataType === 'i8' || dataType === 'u8' ? 'B' :
+      dataType === 'i16' || dataType === 'u16' ? 'W' :
+        dataType === 'i32' || dataType === 'u32' || dataType === 'f32' ? 'D' : 'L'
+  const prefix = direction === 'output' ? 'Q' : 'I'
+
+  return `%${prefix}${width}${index}${width === 'X' ? `.${bit ?? '0'}` : ''}`
+}
+
 export const makeCanopenOdEntry = (existing: CanopenOdEntry[] = []): CanopenOdEntry => {
   const nextIndex = getNextCanopenIndex(existing, 0x1000)
 
@@ -56,7 +73,7 @@ export const makeCanopenPdoMapping = (
   return {
     index: nextIndex,
     subIndex: 0,
-    bitLength: 16,
+    dataType: 'u16',
     name: `value_${existing.length + 1}`,
     plcAddress: getNextPlcWordAddress(direction, existing),
     direction,

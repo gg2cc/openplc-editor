@@ -27,11 +27,11 @@ describe('generateCanConfig', () => {
     expect(odEntry.index).toBe(0x1310)
 
     const firstTpdo = makeCanopenPdo('output')
-    expect(firstTpdo.index).toBe(0x1800)
+    expect(firstTpdo.index).toBe(0x1400)
     expect(firstTpdo.subIndex).toBe(0)
 
     const pdo = makeCanopenPdo('output', [{ index: 0x1800 }, { index: 0x1a00 }])
-    expect(pdo.index).toBe(0x1a10)
+    expect(pdo.index).toBe(0x1400)
 
     const firstMapping = makeCanopenPdoMapping('output')
     expect(firstMapping.index).toBe(0x2000)
@@ -173,7 +173,7 @@ describe('generateCanConfig', () => {
                       index: 0x1800,
                       subIndex: 0,
                       mapping: [
-                        { index: 0x2000, subIndex: 0, bitLength: 16, name: 'out_a', plcAddress: '%QW0', direction: 'output' },
+                        { index: 0x2000, subIndex: 0, dataType: 'u16', name: 'out_a', plcAddress: '%QW0', direction: 'output' },
                       ],
                     },
                   ],
@@ -183,7 +183,7 @@ describe('generateCanConfig', () => {
                       index: 0x1400,
                       subIndex: 0,
                       mapping: [
-                        { index: 0x2100, subIndex: 0, bitLength: 16, name: 'in_a', plcAddress: '%IW0', direction: 'input' },
+                        { index: 0x2100, subIndex: 0, dataType: 'u16', name: 'in_a', plcAddress: '%IW0', direction: 'input' },
                       ],
                     },
                   ],
@@ -295,7 +295,7 @@ describe('generateCanConfig', () => {
                         {
                           index: 0x2000,
                           subIndex: 0,
-                          bitLength: 16,
+                          dataType: 'u16',
                           name: 'deviceType',
                           plcAddress: '%QW0',
                           direction: 'output',
@@ -376,15 +376,15 @@ describe('generateCanConfig', () => {
                       index: 0x1800,
                       subIndex: 0,
                       mapping: [
-                        { index: 0x2000, subIndex: 0, bitLength: 16, name: 'out_a', plcAddress: '%QW0', direction: 'output' },
-                        { index: 0x2001, subIndex: 0, bitLength: 32, name: 'out_b', plcAddress: '%QD1', direction: 'output' },
+                        { index: 0x2000, subIndex: 0, dataType: 'u16', name: 'out_a', plcAddress: '%QW0', direction: 'output' },
+                        { index: 0x2001, subIndex: 0, dataType: 'u32', name: 'out_b', plcAddress: '%QD1', direction: 'output' },
                       ],
                     },
                     {
                       index: 0x1801,
                       subIndex: 0,
                       mapping: [
-                        { index: 0x2002, subIndex: 0, bitLength: 8, name: 'out_c', plcAddress: '%QB2', direction: 'output' },
+                        { index: 0x2002, subIndex: 0, dataType: 'u8', name: 'out_c', plcAddress: '%QB2', direction: 'output' },
                       ],
                     },
                   ],
@@ -393,7 +393,7 @@ describe('generateCanConfig', () => {
                       index: 0x1400,
                       subIndex: 0,
                       mapping: [
-                        { index: 0x2100, subIndex: 0, bitLength: 16, name: 'in_a', plcAddress: '%IW10', direction: 'input' },
+                        { index: 0x2100, subIndex: 0, dataType: 'u16', name: 'in_a', plcAddress: '%IW10', direction: 'input' },
                       ],
                     },
                   ],
@@ -472,7 +472,7 @@ describe('generateCanConfig', () => {
                       index: 0x1800,
                       subIndex: 0,
                       mapping: [
-                        { index: 0x2000, subIndex: 0, bitLength: 16, name: 'out_word', plcAddress: '%QW0', direction: 'output' },
+                        { index: 0x2000, subIndex: 0, dataType: 'u16', name: 'out_word', plcAddress: '%QW0', direction: 'output' },
                       ],
                     },
                   ],
@@ -481,7 +481,7 @@ describe('generateCanConfig', () => {
                       index: 0x1400,
                       subIndex: 0,
                       mapping: [
-                        { index: 0x2100, subIndex: 0, bitLength: 16, name: 'in_word', plcAddress: '%IW0', direction: 'input' },
+                        { index: 0x2100, subIndex: 0, dataType: 'u16', name: 'in_word', plcAddress: '%IW0', direction: 'input' },
                       ],
                     },
                   ],

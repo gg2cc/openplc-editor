@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from '../../../../..
 import { ToggleSwitch } from '../../../../../_atoms/toggle-switch'
 import {
   formatCanopenHex,
+  getCanopenPlcAddressForDataType,
   getNextCanopenBusNumber,
   makeCanopenOdEntry,
   makeCanopenPdo,
@@ -548,11 +549,11 @@ const CanopenDeviceEditor = () => {
                         />
                       </div>
                       <div className='flex flex-col gap-1'>
-                        <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Bit Length</Label>
-                        <InputWithRef
-                          type='number'
-                          value={mapping.bitLength ?? 8}
-                          onChange={(e) => {
+                        <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Type</Label>
+                        <Select
+                          value={mapping.dataType ?? 'u16'}
+                          onValueChange={(value) => {
+                            const dataType = value as CanopenPdoMapping['dataType']
                             const nextBuses = updateCanopenPdoMapping(
                               canopenConfig.buses,
                               busIndex,
@@ -561,13 +562,26 @@ const CanopenDeviceEditor = () => {
                               pdoIndex,
                               mappingIndex,
                               {
-                                bitLength: Number(e.target.value) || 8,
+                                dataType,
+                                plcAddress: getCanopenPlcAddressForDataType(
+                                  pdoType === 'tpdo' ? 'output' : 'input',
+                                  dataType as Exclude<CanopenPdoMapping['dataType'], undefined>,
+                                  mapping.plcAddress,
+                                ),
                               },
                             )
                             updateCanopenStore({ buses: nextBuses })
                           }}
-                          className={inputStyles}
-                        />
+                        >
+                          <SelectTrigger withIndicator className={CAN_SELECT_TRIGGER_STYLES} />
+                          <SelectContent className={CAN_SELECT_CONTENT_STYLES}>
+                            {CANOPEN_DATA_TYPES.map((option) => (
+                              <SelectItem key={option} value={option} className={CAN_SELECT_ITEM_STYLES}>
+                                {option}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </div>
                       <div className='flex flex-col gap-1'>
                         <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>PLC Addr</Label>
