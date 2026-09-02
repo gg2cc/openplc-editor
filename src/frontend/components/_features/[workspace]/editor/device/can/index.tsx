@@ -145,6 +145,7 @@ const RxFrameModal = ({ isOpen, onClose, frame, onSave }: RxFrameModalProps) => 
   const [eff, setEff] = useState(false)
   const [rtr, setRtr] = useState(false)
   const [dlc, setDlc] = useState(8)
+  const [byteOrder, setByteOrder] = useState<'little' | 'big'>('little')
   const [mappings, setMappings] = useState<CanMapping[]>([])
   const [mappingError, setMappingError] = useState<string | null>(null)
 
@@ -154,12 +155,14 @@ const RxFrameModal = ({ isOpen, onClose, frame, onSave }: RxFrameModalProps) => 
       setEff(!!frame.eff)
       setRtr(!!frame.rtr)
       setDlc(frame.dlc ?? 8)
+      setByteOrder(frame.byteOrder ?? 'little')
       setMappings(frame.mappings ? [...frame.mappings] : [])
     } else {
       setCanId('0x123')
       setEff(false)
       setRtr(false)
       setDlc(8)
+      setByteOrder('little')
       setMappings([{ byteOffset: 0, dataType: 'u8', plcAddress: '%IB0' }])
     }
   }, [frame, isOpen])
@@ -209,6 +212,7 @@ const RxFrameModal = ({ isOpen, onClose, frame, onSave }: RxFrameModalProps) => 
       eff,
       rtr,
       dlc,
+      byteOrder,
       mappings,
     })
     onClose()
@@ -259,6 +263,24 @@ const RxFrameModal = ({ isOpen, onClose, frame, onSave }: RxFrameModalProps) => 
               <Label htmlFor='rtr-switch' className='text-xs text-neutral-950 dark:text-white cursor-pointer'>
                 Remote Frame (RTR)
               </Label>
+            </div>
+            <div className='flex items-center gap-2'>
+              <Label className='text-xs text-neutral-950 dark:text-white'>Byte Order</Label>
+              <Select value={byteOrder} onValueChange={(value) => setByteOrder(value as 'little' | 'big')}>
+                <SelectTrigger withIndicator placeholder='Select byte order' className={CAN_SELECT_TRIGGER_STYLES} />
+                <SelectContent className={CAN_SELECT_CONTENT_STYLES}>
+                  <SelectItem value='little' className={CAN_SELECT_ITEM_STYLES}>
+                    <span className='text-start font-caption text-xs font-normal text-neutral-700 dark:text-neutral-100'>
+                      Little Endian
+                    </span>
+                  </SelectItem>
+                  <SelectItem value='big' className={CAN_SELECT_ITEM_STYLES}>
+                    <span className='text-start font-caption text-xs font-normal text-neutral-700 dark:text-neutral-100'>
+                      Big Endian
+                    </span>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
@@ -371,6 +393,7 @@ const TxFrameModal = ({ isOpen, onClose, frame, onSave }: TxFrameModalProps) => 
   const [canId, setCanId] = useState('0x456')
   const [eff, setEff] = useState(false)
   const [dlc, setDlc] = useState(8)
+  const [byteOrder, setByteOrder] = useState<'little' | 'big'>('little')
   const [trigger, setTrigger] = useState<'cyclic' | 'on_change'>('cyclic')
   const [cycleTimeMs, setCycleTimeMs] = useState(10)
   const [mappings, setMappings] = useState<CanMapping[]>([])
@@ -381,6 +404,7 @@ const TxFrameModal = ({ isOpen, onClose, frame, onSave }: TxFrameModalProps) => 
       setCanId(frame.canId || '0x456')
       setEff(!!frame.eff)
       setDlc(frame.dlc ?? 8)
+      setByteOrder(frame.byteOrder ?? 'little')
       setTrigger(frame.trigger ?? 'cyclic')
       setCycleTimeMs(frame.cycleTimeMs ?? 10)
       setMappings(frame.mappings ? [...frame.mappings] : [])
@@ -388,6 +412,7 @@ const TxFrameModal = ({ isOpen, onClose, frame, onSave }: TxFrameModalProps) => 
       setCanId('0x456')
       setEff(false)
       setDlc(8)
+      setByteOrder('little')
       setTrigger('cyclic')
       setCycleTimeMs(10)
       setMappings([{ byteOffset: 0, dataType: 'u8', plcAddress: '%QB0' }])
@@ -438,6 +463,7 @@ const TxFrameModal = ({ isOpen, onClose, frame, onSave }: TxFrameModalProps) => 
       canId,
       eff,
       dlc,
+      byteOrder,
       trigger,
       cycleTimeMs,
       mappings,
@@ -514,6 +540,22 @@ const TxFrameModal = ({ isOpen, onClose, frame, onSave }: TxFrameModalProps) => 
             <Label htmlFor='tx-eff-switch' className='text-xs text-neutral-950 dark:text-white cursor-pointer'>
               Extended Frame (29-bit EFF)
             </Label>
+            <Label className='text-xs text-neutral-950 dark:text-white'>Byte Order</Label>
+            <Select value={byteOrder} onValueChange={(value) => setByteOrder(value as 'little' | 'big')}>
+              <SelectTrigger withIndicator placeholder='Select byte order' className={CAN_SELECT_TRIGGER_STYLES} />
+              <SelectContent className={CAN_SELECT_CONTENT_STYLES}>
+                <SelectItem value='little' className={CAN_SELECT_ITEM_STYLES}>
+                  <span className='text-start font-caption text-xs font-normal text-neutral-700 dark:text-neutral-100'>
+                    Little Endian
+                  </span>
+                </SelectItem>
+                <SelectItem value='big' className={CAN_SELECT_ITEM_STYLES}>
+                  <span className='text-start font-caption text-xs font-normal text-neutral-700 dark:text-neutral-100'>
+                    Big Endian
+                  </span>
+                </SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
           <div className='mt-2 flex flex-col gap-2'>

@@ -57,6 +57,7 @@ export function generateCanConfig(remoteDevices: PLCRemoteDevice[] | undefined):
           eff: frame.eff ?? false,
           rtr: frame.rtr ?? false,
           dlc: frame.dlc ?? 8,
+          byte_order: frame.byteOrder ?? 'little',
           mappings: (frame.mappings ?? []).map((m) => ({
             byte_offset: m.byteOffset ?? 0,
             data_type: m.dataType ?? 'u8',
@@ -67,6 +68,7 @@ export function generateCanConfig(remoteDevices: PLCRemoteDevice[] | undefined):
           can_id: frame.canId || '0x0',
           eff: frame.eff ?? false,
           dlc: frame.dlc ?? 8,
+          byte_order: frame.byteOrder ?? 'little',
           trigger: frame.trigger ?? 'cyclic',
           cycle_time_ms: frame.cycleTimeMs ?? 10,
           mappings: (frame.mappings ?? []).map((m) => ({

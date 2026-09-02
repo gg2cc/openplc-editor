@@ -782,6 +782,7 @@ const CanRxFrameSchema = z.object({
   eff: z.boolean().optional(),
   rtr: z.boolean().optional(),
   dlc: z.number().optional(),
+  byteOrder: z.enum(['little', 'big']).optional(),
   mappings: z.array(CanMappingSchema).optional(),
 })
 export type CanRxFrame = z.infer<typeof CanRxFrameSchema>
@@ -791,6 +792,7 @@ const CanTxFrameSchema = z.object({
   eff: z.boolean().optional(),
   rtr: z.boolean().optional(),
   dlc: z.number().optional(),
+  byteOrder: z.enum(['little', 'big']).optional(),
   trigger: z.enum(['cyclic', 'on_change']).optional(),
   cycleTimeMs: z.number().optional(),
   mappings: z.array(CanMappingSchema).optional(),

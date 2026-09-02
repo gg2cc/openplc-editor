@@ -431,6 +431,7 @@ export interface CanRxFrame {
   eff?: boolean
   rtr?: boolean
   dlc?: number
+  byteOrder?: 'little' | 'big'
   mappings?: CanMapping[]
 }
 
@@ -439,6 +440,7 @@ export interface CanTxFrame {
   eff?: boolean
   rtr?: boolean
   dlc?: number
+  byteOrder?: 'little' | 'big'
   trigger?: 'cyclic' | 'on_change'
   cycleTimeMs?: number
   mappings?: CanMapping[]

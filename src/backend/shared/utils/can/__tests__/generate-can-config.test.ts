@@ -99,6 +99,7 @@ describe('generateCanConfig', () => {
             {
               canId: '0x123',
               dlc: 8,
+              byteOrder: 'big',
               mappings: [{ byteOffset: 0, dataType: 'u8', plcAddress: '%IB0' }],
             },
           ],
@@ -140,6 +141,8 @@ describe('generateCanConfig', () => {
     expect(output).toContain('"data_status_timeout_ms": 5000')
     expect(output).toContain('"rx_frames"')
     expect(output).toContain('"tx_frames"')
+    expect(output).toContain('"byte_order": "big"')
+    expect(output).toContain('"byte_order": "little"')
     expect(output).toContain('"data_type": "u8"')
     expect(output).toContain('"plc_address": "%IB0"')
     expect(output).toContain('"plc_address": "%QB0"')
