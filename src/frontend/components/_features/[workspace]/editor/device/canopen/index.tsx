@@ -361,7 +361,7 @@ const CanopenDeviceEditor = () => {
 
               <div className='grid grid-cols-2 gap-2 md:grid-cols-4'>
                 <div className='flex flex-col gap-1'>
-                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Index</Label>
+                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>COB-ID</Label>
                   <InputWithRef
                     inputMode='text'
                     value={formatCanopenHex(pdo.index)}
@@ -374,27 +374,6 @@ const CanopenDeviceEditor = () => {
                         pdoIndex,
                         {
                           index: parseCanopenHex(e.target.value),
-                        },
-                      )
-                      updateCanopenStore({ buses: nextBuses })
-                    }}
-                    className={inputStyles}
-                  />
-                </div>
-                <div className='flex flex-col gap-1'>
-                  <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>SubIndex</Label>
-                  <InputWithRef
-                    type='number'
-                    value={pdo.subIndex ?? 0}
-                    onChange={(e) => {
-                      const nextBuses = updateCanopenPdo(
-                        canopenConfig.buses,
-                        busIndex,
-                        slaveIndex,
-                        pdoType,
-                        pdoIndex,
-                        {
-                          subIndex: Number(e.target.value) || 0,
                         },
                       )
                       updateCanopenStore({ buses: nextBuses })

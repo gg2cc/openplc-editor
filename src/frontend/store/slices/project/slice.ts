@@ -1656,6 +1656,9 @@ const createProjectSlice: StateCreator<ProjectSliceRoot, [], [], ProjectSlice> =
                 restartMs: 100,
                 tripleSampling: false,
               },
+              portStatusPlcAddress: '%IB0',
+              dataStatusPlcAddress: '%IB1',
+              dataStatusTimeoutMs: 3000,
               rxFrames: [],
               txFrames: [],
             }

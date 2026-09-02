@@ -21,7 +21,6 @@ describe('generateCanConfig', () => {
 
     const firstTpdo = makeCanopenPdo('output')
     expect(firstTpdo.index).toBe(0x1400)
-    expect(firstTpdo.subIndex).toBe(0)
 
     const pdo = makeCanopenPdo('output', [{ index: 0x1800 }, { index: 0x1a00 }])
     expect(pdo.index).toBe(0x1400)
@@ -93,11 +92,14 @@ describe('generateCanConfig', () => {
             restartMs: 200,
             tripleSampling: true,
           },
+          portStatusPlcAddress: '%IB10',
+          dataStatusPlcAddress: '%IB11',
+          dataStatusTimeoutMs: 5000,
           rxFrames: [
             {
               canId: '0x123',
               dlc: 8,
-              mappings: [{ byteOffset: 0, iecType: 'BYTE_INPUT', iecIndex: 0 }],
+              mappings: [{ byteOffset: 0, dataType: 'u8', plcAddress: '%IB0' }],
             },
           ],
           txFrames: [],
@@ -120,7 +122,7 @@ describe('generateCanConfig', () => {
             {
               canId: '0x456',
               dlc: 8,
-              mappings: [{ byteOffset: 0, iecType: 'BYTE_OUTPUT', iecIndex: 0 }],
+              mappings: [{ byteOffset: 0, dataType: 'u8', plcAddress: '%QB0' }],
             },
           ],
         },
@@ -133,8 +135,16 @@ describe('generateCanConfig', () => {
     expect(output).toContain('"interfaces"')
     expect(output).toContain('"interface": "can0"')
     expect(output).toContain('"interface": "can1"')
+    expect(output).toContain('"port_status_plc_address": "%IB10"')
+    expect(output).toContain('"data_status_plc_address": "%IB11"')
+    expect(output).toContain('"data_status_timeout_ms": 5000')
     expect(output).toContain('"rx_frames"')
     expect(output).toContain('"tx_frames"')
+    expect(output).toContain('"data_type": "u8"')
+    expect(output).toContain('"plc_address": "%IB0"')
+    expect(output).toContain('"plc_address": "%QB0"')
+    expect(output).not.toContain('"iec_type"')
+    expect(output).not.toContain('"iec_index"')
   })
 
   it('emits a bus-master-slave CANopen structure with explicit slave node ids', () => {
@@ -164,7 +174,6 @@ describe('generateCanConfig', () => {
                     {
                       name: 'tpdo_1',
                       index: 0x1800,
-                      subIndex: 0,
                       mapping: [
                         { index: 0x2000, subIndex: 0, dataType: 'u16', name: 'out_a', plcAddress: '%QW0', direction: 'output' },
                       ],
@@ -174,7 +183,6 @@ describe('generateCanConfig', () => {
                     {
                       name: 'rpdo_1',
                       index: 0x1400,
-                      subIndex: 0,
                       mapping: [
                         { index: 0x2100, subIndex: 0, dataType: 'u16', name: 'in_a', plcAddress: '%IW0', direction: 'input' },
                       ],
@@ -273,7 +281,6 @@ describe('generateCanConfig', () => {
                   tpdo: [
                     {
                       index: 0x1800,
-                      subIndex: 0,
                       mapping: [
                         {
                           index: 0x2000,
@@ -353,7 +360,6 @@ describe('generateCanConfig', () => {
                   tpdo: [
                     {
                       index: 0x1800,
-                      subIndex: 0,
                       mapping: [
                         { index: 0x2000, subIndex: 0, dataType: 'u16', name: 'out_a', plcAddress: '%QW0', direction: 'output' },
                         { index: 0x2001, subIndex: 0, dataType: 'u32', name: 'out_b', plcAddress: '%QD1', direction: 'output' },
@@ -361,7 +367,6 @@ describe('generateCanConfig', () => {
                     },
                     {
                       index: 0x1801,
-                      subIndex: 0,
                       mapping: [
                         { index: 0x2002, subIndex: 0, dataType: 'u8', name: 'out_c', plcAddress: '%QB2', direction: 'output' },
                       ],
@@ -370,7 +375,6 @@ describe('generateCanConfig', () => {
                   rpdo: [
                     {
                       index: 0x1400,
-                      subIndex: 0,
                       mapping: [
                         { index: 0x2100, subIndex: 0, dataType: 'u16', name: 'in_a', plcAddress: '%IW10', direction: 'input' },
                       ],
@@ -445,7 +449,6 @@ describe('generateCanConfig', () => {
                   tpdo: [
                     {
                       index: 0x1800,
-                      subIndex: 0,
                       mapping: [
                         { index: 0x2000, subIndex: 0, dataType: 'u16', name: 'out_word', plcAddress: '%QW0', direction: 'output' },
                       ],
@@ -454,7 +457,6 @@ describe('generateCanConfig', () => {
                   rpdo: [
                     {
                       index: 0x1400,
-                      subIndex: 0,
                       mapping: [
                         { index: 0x2100, subIndex: 0, dataType: 'u16', name: 'in_word', plcAddress: '%IW0', direction: 'input' },
                       ],

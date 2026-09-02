@@ -23,23 +23,91 @@ const BITRATE_OPTIONS = [
   { value: '1000000', label: '1 Mbps' },
 ]
 
-const RX_IEC_TYPES = [
-  { value: 'BYTE_INPUT', label: 'BYTE (%IB)' },
-  { value: 'WORD_INPUT', label: 'WORD (%IW)' },
-  { value: 'INT_INPUT', label: 'INT (%IW)' },
-  { value: 'DINT_INPUT', label: 'DINT (%ID)' },
-  { value: 'REAL_INPUT', label: 'REAL (%ID)' },
-  { value: 'BOOL_INPUT', label: 'BOOL (%IX)' },
+const CAN_DATA_TYPES = [
+  { value: 'bool', label: 'BOOL' },
+  { value: 'u8', label: 'Unsigned 8-bit' },
+  { value: 'i8', label: 'Signed 8-bit' },
+  { value: 'u16', label: 'Unsigned 16-bit' },
+  { value: 'i16', label: 'Signed 16-bit' },
+  { value: 'u32', label: 'Unsigned 32-bit' },
+  { value: 'i32', label: 'Signed 32-bit' },
+  { value: 'u64', label: 'Unsigned 64-bit' },
+  { value: 'i64', label: 'Signed 64-bit' },
+  { value: 'f32', label: 'Float 32-bit' },
+  { value: 'f64', label: 'Float 64-bit' },
 ]
 
-const TX_IEC_TYPES = [
-  { value: 'BYTE_OUTPUT', label: 'BYTE (%QB)' },
-  { value: 'WORD_OUTPUT', label: 'WORD (%QW)' },
-  { value: 'INT_OUTPUT', label: 'INT (%QW)' },
-  { value: 'DINT_OUTPUT', label: 'DINT (%QD)' },
-  { value: 'REAL_OUTPUT', label: 'REAL (%QD)' },
-  { value: 'BOOL_OUTPUT', label: 'BOOL (%QX)' },
-]
+type CanDataType = CanMapping['dataType']
+
+const dataTypeWidth = (dataType: CanDataType) =>
+  dataType === 'bool' || dataType.endsWith('8') ? 1 : dataType.endsWith('16') ? 2 : dataType.endsWith('64') ? 8 : 4
+
+const plcAddressPattern = /^(%I|%Q)(X|B|W|D|L)(\d+)(?:\.(\d+))?$/i
+
+const validateMappings = (mappings: CanMapping[], dlc: number, direction: 'input' | 'output') => {
+  const ranges: Array<{ start: number; end: number; bit?: number }> = []
+  for (const mapping of mappings) {
+    const address = plcAddressPattern.exec(mapping.plcAddress.trim())
+    if (!address) return `Invalid PLC address: ${mapping.plcAddress}`
+    if ((direction === 'input' && address[1].toUpperCase() !== '%I') ||
+        (direction === 'output' && address[1].toUpperCase() !== '%Q')) {
+      return `PLC address direction must be %${direction === 'input' ? 'I' : 'Q'}`
+    }
+    const expectedKind = mapping.dataType === 'bool' ? 'X' : dataTypeWidth(mapping.dataType) === 1 ? 'B' : dataTypeWidth(mapping.dataType) === 2 ? 'W' : dataTypeWidth(mapping.dataType) === 4 ? 'D' : 'L'
+    if (address[2].toUpperCase() !== expectedKind) return `${mapping.dataType} requires %${expectedKind} address`
+    const bit = address[4] === undefined ? undefined : Number(address[4])
+    if (mapping.dataType === 'bool' && (bit === undefined || bit < 0 || bit > 7)) return 'BOOL address requires bit 0..7'
+    if (mapping.dataType !== 'bool' && bit !== undefined) return 'Only BOOL may use a bit address'
+    const start = mapping.byteOffset
+    const end = start + dataTypeWidth(mapping.dataType)
+    if (!Number.isInteger(start) || start < 0 || end > dlc) return `${mapping.dataType} exceeds DLC ${dlc}`
+    for (const range of ranges) {
+      if (start < range.end && end > range.start) {
+        if (mapping.dataType === 'bool' && range.bit !== undefined && bit !== undefined && start === range.start && bit !== range.bit) continue
+        return `Payload mapping overlaps byte ${range.start}`
+      }
+    }
+    ranges.push({ start, end, bit })
+  }
+  return null
+}
+
+const findNextMappingOffset = (mappings: CanMapping[], dlc: number) => {
+  const nextOffset = mappings.reduce(
+    (offset, mapping) => Math.max(offset, mapping.byteOffset + dataTypeWidth(mapping.dataType)),
+    0,
+  )
+  return nextOffset < dlc ? nextOffset : -1
+}
+
+const findNextPlcAddressIndex = (mappings: CanMapping[]) => {
+  const previousMapping = mappings[mappings.length - 1]
+  const address = previousMapping && plcAddressPattern.exec(previousMapping.plcAddress.trim())
+  return address ? Number(address[3]) + 1 : 0
+}
+
+const plcAddressKindForType = (dataType: CanDataType) =>
+  dataType === 'bool' ? 'X' : dataTypeWidth(dataType) === 1 ? 'B' : dataTypeWidth(dataType) === 2 ? 'W' : dataTypeWidth(dataType) === 4 ? 'D' : 'L'
+
+const updatePlcAddressType = (plcAddress: string, dataType: CanDataType) => {
+  const address = plcAddressPattern.exec(plcAddress.trim())
+  if (!address) return plcAddress
+  const bit = dataType === 'bool' ? `.${address[4] ?? '0'}` : ''
+  return `${address[1].toUpperCase()}${plcAddressKindForType(dataType)}${address[3]}${bit}`
+}
+
+const updateMappingDataType = (mapping: CanMapping, dataType: CanDataType): CanMapping => ({
+  ...mapping,
+  dataType,
+  plcAddress: updatePlcAddressType(mapping.plcAddress, dataType),
+})
+
+const nextPlcAddress = (mapping: CanMapping | undefined, dataType: CanDataType, index: number, direction: 'I' | 'Q') => {
+  const address = mapping && plcAddressPattern.exec(mapping.plcAddress.trim())
+  const area = address?.[1].slice(1).toUpperCase() ?? direction
+  const kind = plcAddressKindForType(dataType)
+  return `%${area}${kind}${index}${dataType === 'bool' ? '.0' : ''}`
+}
 
 const TRIGGER_OPTIONS = [
   { value: 'cyclic', label: 'Cyclic (周期发送)' },
@@ -78,6 +146,7 @@ const RxFrameModal = ({ isOpen, onClose, frame, onSave }: RxFrameModalProps) => 
   const [rtr, setRtr] = useState(false)
   const [dlc, setDlc] = useState(8)
   const [mappings, setMappings] = useState<CanMapping[]>([])
+  const [mappingError, setMappingError] = useState<string | null>(null)
 
   useEffect(() => {
     if (frame) {
@@ -91,26 +160,50 @@ const RxFrameModal = ({ isOpen, onClose, frame, onSave }: RxFrameModalProps) => 
       setEff(false)
       setRtr(false)
       setDlc(8)
-      setMappings([{ byteOffset: 0, iecType: 'BYTE_INPUT', iecIndex: 0 }])
+      setMappings([{ byteOffset: 0, dataType: 'u8', plcAddress: '%IB0' }])
     }
   }, [frame, isOpen])
 
   const handleAddMapping = () => {
-    const nextOffset = mappings.length > 0 ? (mappings[mappings.length - 1].byteOffset + 1) % 8 : 0
-    setMappings([...mappings, { byteOffset: nextOffset, iecType: 'BYTE_INPUT', iecIndex: mappings.length }])
+    const nextOffset = findNextMappingOffset(mappings, dlc)
+    if (nextOffset < 0) {
+      setMappingError(`No available payload byte within DLC ${dlc}`)
+      return
+    }
+    const previousMapping = mappings[mappings.length - 1]
+    const dataType = previousMapping?.dataType ?? 'u8'
+    const nextPlcIndex = findNextPlcAddressIndex(mappings)
+    const plcAddress = nextPlcAddress(previousMapping, dataType, nextPlcIndex, 'I')
+    setMappings([...mappings, { byteOffset: nextOffset, dataType, plcAddress }])
+    setMappingError(null)
   }
 
   const handleRemoveMapping = (index: number) => {
-    setMappings(mappings.filter((_, i) => i !== index))
+    const updated = mappings.filter((_, i) => i !== index)
+    setMappings(updated)
+    setMappingError(validateMappings(updated, dlc, 'input'))
+  }
+
+  const handleDlcChange = (value: number) => {
+    setDlc(value)
+    setMappingError(validateMappings(mappings, value, 'input'))
   }
 
   const handleUpdateMapping = (index: number, key: keyof CanMapping, value: string | number) => {
     const updated = [...mappings]
-    updated[index] = { ...updated[index], [key]: value }
+    updated[index] = key === 'dataType'
+      ? updateMappingDataType(updated[index], value as CanDataType)
+      : { ...updated[index], [key]: value } as CanMapping
     setMappings(updated)
+    setMappingError(validateMappings(updated, dlc, 'input'))
   }
 
   const handleSave = () => {
+    const error = validateMappings(mappings, dlc, 'input')
+    if (error) {
+      setMappingError(error)
+      return
+    }
     onSave({
       canId,
       eff,
@@ -148,7 +241,7 @@ const RxFrameModal = ({ isOpen, onClose, frame, onSave }: RxFrameModalProps) => 
                 min={1}
                 max={8}
                 value={dlc}
-                onChange={(e) => setDlc(parseInt(e.target.value, 10) || 8)}
+                onChange={(e) => handleDlcChange(parseInt(e.target.value, 10) || 8)}
                 className={inputStyles}
               />
             </div>
@@ -207,12 +300,12 @@ const RxFrameModal = ({ isOpen, onClose, frame, onSave }: RxFrameModalProps) => 
 
                     <div className='w-36'>
                       <Select
-                        value={m.iecType}
-                        onValueChange={(val) => handleUpdateMapping(idx, 'iecType', val)}
+                        value={m.dataType}
+                        onValueChange={(val) => handleUpdateMapping(idx, 'dataType', val as CanDataType)}
                       >
                         <SelectTrigger className='h-[26px] text-xs px-2' />
                         <SelectContent className='bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800'>
-                          {RX_IEC_TYPES.map((t) => (
+                          {CAN_DATA_TYPES.map((t) => (
                             <SelectItem key={t.value} value={t.value} className='text-xs py-1 px-2 cursor-pointer'>
                               {t.label}
                             </SelectItem>
@@ -221,14 +314,13 @@ const RxFrameModal = ({ isOpen, onClose, frame, onSave }: RxFrameModalProps) => 
                       </Select>
                     </div>
 
-                    <div className='flex items-center gap-1 w-24'>
-                      <Label className='text-[11px] text-neutral-600 dark:text-neutral-400'>Idx</Label>
+                    <div className='flex items-center gap-1 flex-1'>
+                      <Label className='text-[11px] text-neutral-600 dark:text-neutral-400'>PLC</Label>
                       <InputWithRef
-                        type='number'
-                        min={0}
-                        value={m.iecIndex}
-                        onChange={(e) => handleUpdateMapping(idx, 'iecIndex', parseInt(e.target.value, 10) || 0)}
-                        className='h-[26px] w-14 rounded border px-1 text-xs'
+                        value={m.plcAddress}
+                        onChange={(e) => handleUpdateMapping(idx, 'plcAddress', e.target.value)}
+                        placeholder='%IB0 or %IX0.0'
+                        className='h-[26px] min-w-24 flex-1 rounded border px-1 text-xs'
                       />
                     </div>
 
@@ -243,6 +335,7 @@ const RxFrameModal = ({ isOpen, onClose, frame, onSave }: RxFrameModalProps) => 
                 ))
               )}
             </div>
+            {mappingError && <p className='text-xs text-red-600'>{mappingError}</p>}
           </div>
         </div>
         <ModalFooter>
@@ -281,6 +374,7 @@ const TxFrameModal = ({ isOpen, onClose, frame, onSave }: TxFrameModalProps) => 
   const [trigger, setTrigger] = useState<'cyclic' | 'on_change'>('cyclic')
   const [cycleTimeMs, setCycleTimeMs] = useState(10)
   const [mappings, setMappings] = useState<CanMapping[]>([])
+  const [mappingError, setMappingError] = useState<string | null>(null)
 
   useEffect(() => {
     if (frame) {
@@ -296,26 +390,50 @@ const TxFrameModal = ({ isOpen, onClose, frame, onSave }: TxFrameModalProps) => 
       setDlc(8)
       setTrigger('cyclic')
       setCycleTimeMs(10)
-      setMappings([{ byteOffset: 0, iecType: 'BYTE_OUTPUT', iecIndex: 0 }])
+      setMappings([{ byteOffset: 0, dataType: 'u8', plcAddress: '%QB0' }])
     }
   }, [frame, isOpen])
 
   const handleAddMapping = () => {
-    const nextOffset = mappings.length > 0 ? (mappings[mappings.length - 1].byteOffset + 1) % 8 : 0
-    setMappings([...mappings, { byteOffset: nextOffset, iecType: 'BYTE_OUTPUT', iecIndex: mappings.length }])
+    const nextOffset = findNextMappingOffset(mappings, dlc)
+    if (nextOffset < 0) {
+      setMappingError(`No available payload byte within DLC ${dlc}`)
+      return
+    }
+    const previousMapping = mappings[mappings.length - 1]
+    const dataType = previousMapping?.dataType ?? 'u8'
+    const nextPlcIndex = findNextPlcAddressIndex(mappings)
+    const plcAddress = nextPlcAddress(previousMapping, dataType, nextPlcIndex, 'Q')
+    setMappings([...mappings, { byteOffset: nextOffset, dataType, plcAddress }])
+    setMappingError(null)
   }
 
   const handleRemoveMapping = (index: number) => {
-    setMappings(mappings.filter((_, i) => i !== index))
+    const updated = mappings.filter((_, i) => i !== index)
+    setMappings(updated)
+    setMappingError(validateMappings(updated, dlc, 'output'))
+  }
+
+  const handleDlcChange = (value: number) => {
+    setDlc(value)
+    setMappingError(validateMappings(mappings, value, 'output'))
   }
 
   const handleUpdateMapping = (index: number, key: keyof CanMapping, value: string | number) => {
     const updated = [...mappings]
-    updated[index] = { ...updated[index], [key]: value }
+    updated[index] = key === 'dataType'
+      ? updateMappingDataType(updated[index], value as CanDataType)
+      : { ...updated[index], [key]: value } as CanMapping
     setMappings(updated)
+    setMappingError(validateMappings(updated, dlc, 'output'))
   }
 
   const handleSave = () => {
+    const error = validateMappings(mappings, dlc, 'output')
+    if (error) {
+      setMappingError(error)
+      return
+    }
     onSave({
       canId,
       eff,
@@ -354,7 +472,7 @@ const TxFrameModal = ({ isOpen, onClose, frame, onSave }: TxFrameModalProps) => 
                 min={1}
                 max={8}
                 value={dlc}
-                onChange={(e) => setDlc(parseInt(e.target.value, 10) || 8)}
+                onChange={(e) => handleDlcChange(parseInt(e.target.value, 10) || 8)}
                 className={inputStyles}
               />
             </div>
@@ -436,12 +554,12 @@ const TxFrameModal = ({ isOpen, onClose, frame, onSave }: TxFrameModalProps) => 
 
                     <div className='w-36'>
                       <Select
-                        value={m.iecType}
-                        onValueChange={(val) => handleUpdateMapping(idx, 'iecType', val)}
+                        value={m.dataType}
+                        onValueChange={(val) => handleUpdateMapping(idx, 'dataType', val as CanDataType)}
                       >
                         <SelectTrigger className='h-[26px] text-xs px-2' />
                         <SelectContent className='bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800'>
-                          {TX_IEC_TYPES.map((t) => (
+                          {CAN_DATA_TYPES.map((t) => (
                             <SelectItem key={t.value} value={t.value} className='text-xs py-1 px-2 cursor-pointer'>
                               {t.label}
                             </SelectItem>
@@ -450,14 +568,13 @@ const TxFrameModal = ({ isOpen, onClose, frame, onSave }: TxFrameModalProps) => 
                       </Select>
                     </div>
 
-                    <div className='flex items-center gap-1 w-24'>
-                      <Label className='text-[11px] text-neutral-600 dark:text-neutral-400'>Idx</Label>
+                    <div className='flex items-center gap-1 flex-1'>
+                      <Label className='text-[11px] text-neutral-600 dark:text-neutral-400'>PLC</Label>
                       <InputWithRef
-                        type='number'
-                        min={0}
-                        value={m.iecIndex}
-                        onChange={(e) => handleUpdateMapping(idx, 'iecIndex', parseInt(e.target.value, 10) || 0)}
-                        className='h-[26px] w-14 rounded border px-1 text-xs'
+                        value={m.plcAddress}
+                        onChange={(e) => handleUpdateMapping(idx, 'plcAddress', e.target.value)}
+                        placeholder='%QB0 or %QX0.0'
+                        className='h-[26px] min-w-24 flex-1 rounded border px-1 text-xs'
                       />
                     </div>
 
@@ -472,6 +589,7 @@ const TxFrameModal = ({ isOpen, onClose, frame, onSave }: TxFrameModalProps) => 
                 ))
               )}
             </div>
+            {mappingError && <p className='text-xs text-red-600'>{mappingError}</p>}
           </div>
         </div>
         <ModalFooter>
@@ -514,6 +632,9 @@ const CanDeviceEditor = () => {
     return (
       device?.canConfig ?? {
         hardwareConfig: DEFAULT_HARDWARE_CONFIG,
+        portStatusPlcAddress: '%IB0',
+        dataStatusPlcAddress: '%IB1',
+        dataStatusTimeoutMs: 3000,
         rxFrames: [],
         txFrames: [],
       }
@@ -677,6 +798,45 @@ const CanDeviceEditor = () => {
               </Label>
             </div>
           </div>
+
+          <div className='grid grid-cols-3 gap-4 border-t border-neutral-100 pt-4 dark:border-neutral-800'>
+            <div className='flex flex-col gap-1.5'>
+              <Label className='text-xs text-neutral-700 dark:text-neutral-300'>CAN Port Status (%IB)</Label>
+              <InputWithRef
+                value={canConfig.portStatusPlcAddress ?? '%IB0'}
+                onChange={(e) => updateStore({ ...canConfig, portStatusPlcAddress: e.target.value })}
+                placeholder='%IB0'
+                className={inputStyles}
+              />
+            </div>
+
+            <div className='flex flex-col gap-1.5'>
+              <Label className='text-xs text-neutral-700 dark:text-neutral-300'>CAN Data Status (%IB)</Label>
+              <InputWithRef
+                value={canConfig.dataStatusPlcAddress ?? '%IB1'}
+                onChange={(e) => updateStore({ ...canConfig, dataStatusPlcAddress: e.target.value })}
+                placeholder='%IB1'
+                className={inputStyles}
+              />
+            </div>
+
+            <div className='flex flex-col gap-1.5'>
+              <Label className='text-xs text-neutral-700 dark:text-neutral-300'>Data Status Timeout (ms)</Label>
+              <InputWithRef
+                type='number'
+                min={100}
+                max={600000}
+                value={canConfig.dataStatusTimeoutMs ?? 3000}
+                onChange={(e) =>
+                  updateStore({
+                    ...canConfig,
+                    dataStatusTimeoutMs: Math.max(100, parseInt(e.target.value, 10) || 3000),
+                  })
+                }
+                className={inputStyles}
+              />
+            </div>
+          </div>
         </div>
 
         {/* RX Frames Table */}
@@ -737,7 +897,7 @@ const CanDeviceEditor = () => {
                           <span className='italic text-neutral-400'>None</span>
                         ) : (
                           (frame.mappings ?? [])
-                            .map((m) => `Byte ${m.byteOffset} to ${m.iecType} #${m.iecIndex}`)
+                            .map((m) => `Byte ${m.byteOffset} to ${m.plcAddress} (${m.dataType})`)
                             .join(', ')
                         )}
                       </td>
@@ -775,7 +935,7 @@ const CanDeviceEditor = () => {
           <div className='mb-4 flex items-center justify-between'>
             <div>
               <h2 className='font-display text-sm font-semibold text-neutral-950 dark:text-white'>
-                TX Frames (发送报文 - 读取自 PLC %Q 输出表)
+                TX Frames (发送报文 - 映射至 PLC %Q 输出表)
               </h2>
               <p className='text-xs text-neutral-500'>
                 从 PLC 输出表读取数据，打包构造 CAN 帧并发送至物理总线
@@ -831,7 +991,7 @@ const CanDeviceEditor = () => {
                           <span className='italic text-neutral-400'>None</span>
                         ) : (
                           (frame.mappings ?? [])
-                            .map((m) => `Byte ${m.byteOffset} from ${m.iecType} #${m.iecIndex}`)
+                            .map((m) => `Byte ${m.byteOffset} from ${m.plcAddress} (${m.dataType})`)
                             .join(', ')
                         )}
                       </td>

@@ -422,8 +422,8 @@ export interface CanHardwareConfig {
 
 export interface CanMapping {
   byteOffset: number
-  iecType: string
-  iecIndex: number
+  dataType: 'bool' | 'u8' | 'i8' | 'u16' | 'i16' | 'u32' | 'i32' | 'u64' | 'i64' | 'f32' | 'f64'
+  plcAddress: string
 }
 
 export interface CanRxFrame {
@@ -446,6 +446,9 @@ export interface CanTxFrame {
 
 export interface CanConfig {
   hardwareConfig?: CanHardwareConfig
+  portStatusPlcAddress?: string
+  dataStatusPlcAddress?: string
+  dataStatusTimeoutMs?: number
   rxFrames?: CanRxFrame[]
   txFrames?: CanTxFrame[]
 }
@@ -480,7 +483,6 @@ export interface CanopenPdoMapping {
 export interface CanopenPdo {
   name?: string
   index: number
-  subIndex?: number
   mapping?: CanopenPdoMapping[]
 }
 

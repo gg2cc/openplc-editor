@@ -11,12 +11,23 @@ export function generateCanConfig(remoteDevices: PLCRemoteDevice[] | undefined):
   const canDevices = remoteDevices.filter((device) => device.protocol === 'can' && device.canConfig)
   if (canDevices.length === 0) return null
 
-  const interfaces = canDevices.flatMap((device) => {
-    const { hardwareConfig, rxFrames = [], txFrames = [] } = device.canConfig ?? {}
+  const interfaces = canDevices.flatMap((device, deviceIndex) => {
+    const {
+      hardwareConfig,
+      portStatusPlcAddress,
+      dataStatusPlcAddress,
+      dataStatusTimeoutMs,
+      rxFrames = [],
+      txFrames = [],
+    } = device.canConfig ?? {}
+    const defaultPortStatusPlcAddress = `%IB${deviceIndex * 2}`
+    const defaultDataStatusPlcAddress = `%IB${deviceIndex * 2 + 1}`
 
     const hasRealConfig =
       (rxFrames?.length ?? 0) > 0 ||
       (txFrames?.length ?? 0) > 0 ||
+      !!portStatusPlcAddress ||
+      !!dataStatusPlcAddress ||
       !!hardwareConfig &&
         (hardwareConfig.interface !== 'can0' ||
           hardwareConfig.bitrate !== 500000 ||
@@ -30,6 +41,9 @@ export function generateCanConfig(remoteDevices: PLCRemoteDevice[] | undefined):
     return [
       {
         interface: hardwareConfig?.interface ?? 'can0',
+        port_status_plc_address: portStatusPlcAddress ?? defaultPortStatusPlcAddress,
+        data_status_plc_address: dataStatusPlcAddress ?? defaultDataStatusPlcAddress,
+        data_status_timeout_ms: dataStatusTimeoutMs ?? 3000,
         hardware_config: {
           interface: hardwareConfig?.interface ?? 'can0',
           bitrate: hardwareConfig?.bitrate ?? 500000,
@@ -45,8 +59,8 @@ export function generateCanConfig(remoteDevices: PLCRemoteDevice[] | undefined):
           dlc: frame.dlc ?? 8,
           mappings: (frame.mappings ?? []).map((m) => ({
             byte_offset: m.byteOffset ?? 0,
-            iec_type: m.iecType ?? 'BYTE_INPUT',
-            iec_index: m.iecIndex ?? 0,
+            data_type: m.dataType ?? 'u8',
+            plc_address: m.plcAddress ?? '%IB0',
           })),
         })),
         tx_frames: txFrames.map((frame) => ({
@@ -57,8 +71,8 @@ export function generateCanConfig(remoteDevices: PLCRemoteDevice[] | undefined):
           cycle_time_ms: frame.cycleTimeMs ?? 10,
           mappings: (frame.mappings ?? []).map((m) => ({
             byte_offset: m.byteOffset ?? 0,
-            iec_type: m.iecType ?? 'BYTE_OUTPUT',
-            iec_index: m.iecIndex ?? 0,
+            data_type: m.dataType ?? 'u8',
+            plc_address: m.plcAddress ?? '%QB0',
           })),
         })),
       },

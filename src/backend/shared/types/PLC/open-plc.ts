@@ -771,9 +771,9 @@ const CanHardwareConfigSchema = z.object({
 export type CanHardwareConfig = z.infer<typeof CanHardwareConfigSchema>
 
 const CanMappingSchema = z.object({
-  byteOffset: z.number(),
-  iecType: z.string(),
-  iecIndex: z.number(),
+  byteOffset: z.number().int().min(0).max(7),
+  dataType: z.enum(['bool', 'u8', 'i8', 'u16', 'i16', 'u32', 'i32', 'u64', 'i64', 'f32', 'f64']),
+  plcAddress: z.string().regex(/^%(IX|IB|IW|ID|IL|QX|QB|QW|QD|QL)\d+(\.\d+)?$/i),
 })
 export type CanMapping = z.infer<typeof CanMappingSchema>
 
@@ -799,6 +799,9 @@ export type CanTxFrame = z.infer<typeof CanTxFrameSchema>
 
 const CanConfigSchema = z.object({
   hardwareConfig: CanHardwareConfigSchema.optional(),
+  portStatusPlcAddress: z.string().regex(/^%IB\d+$/i).optional(),
+  dataStatusPlcAddress: z.string().regex(/^%IB\d+$/i).optional(),
+  dataStatusTimeoutMs: z.number().int().min(100).max(600000).optional(),
   rxFrames: z.array(CanRxFrameSchema).optional(),
   txFrames: z.array(CanTxFrameSchema).optional(),
 })
@@ -823,7 +826,6 @@ const CanopenPdoMappingSchema = z.object({
 const CanopenPdoSchema = z.object({
   name: z.string().optional(),
   index: z.number().int().min(0).max(0xffff),
-  subIndex: z.number().int().min(0).max(0xff).optional(),
   mapping: z.array(CanopenPdoMappingSchema).optional(),
 })
 
