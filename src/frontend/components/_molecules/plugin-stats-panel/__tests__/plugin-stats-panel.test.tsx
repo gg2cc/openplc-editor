@@ -34,4 +34,46 @@ describe('PluginStatsPanel', () => {
     expect(screen.getByText('3')).toBeTruthy()
     expect(screen.getByText('5')).toBeTruthy()
   })
+
+  it('renders multiple rows for a grouped CANopen interface payload', () => {
+    const pluginStats = {
+      canopen: {
+        interfaces: {
+          can1: {
+            label: 'CANopen (can1)',
+            fields: [],
+            rows: [
+              {
+                key: 'bus',
+                fields: [
+                  { label: 'Role', value: 'Bus' },
+                  { label: 'Name', value: 'main' },
+                  { label: 'Node ID', value: '-' },
+                  { label: 'Interface', value: 'can1 / 500 Kbps' },
+                  { label: 'Status', value: 'OK' },
+                ],
+              },
+              {
+                key: 'slave-0',
+                fields: [
+                  { label: 'Role', value: 'Slave' },
+                  { label: 'Name', value: 'drive' },
+                  { label: 'Node ID', value: '3' },
+                  { label: 'Interface', value: 'can1' },
+                  { label: 'Status', value: 'Operational' },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    }
+
+    render(<PluginStatsPanel pluginStats={pluginStats as any} />)
+
+    expect(screen.getByText('CANopen (can1)')).toBeTruthy()
+    expect(screen.getByText('main')).toBeTruthy()
+    expect(screen.getByText('drive')).toBeTruthy()
+    expect(screen.getByText('Operational')).toBeTruthy()
+  })
 })

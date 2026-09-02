@@ -1,5 +1,5 @@
 import { StatsTable, type StatsTableColumn } from '@root/frontend/components/_molecules/stats-table'
-import type { PluginStatsField, PluginStatsPayload, TimingStats } from '@root/middleware/shared/ports/types'
+import type { PluginStatsField, PluginStatsPayload, PluginStatsRow, TimingStats } from '@root/middleware/shared/ports/types'
 
 interface PluginStatsPanelProps {
   /** Optional opaque plugin-contributed stats from the runtime. Each
@@ -12,6 +12,7 @@ interface FlattenedPluginStatsEntry {
   key: string
   title: string
   fields: PluginStatsField[]
+  rows?: PluginStatsRow[]
 }
 
 const flattenPluginStats = (
@@ -32,6 +33,7 @@ const flattenPluginStats = (
       key: `${pluginName}-${ifaceName}`,
       title: ifacePayload?.label ?? `${pluginName} (${ifaceName})`,
       fields: ifacePayload?.fields ?? [],
+      rows: ifacePayload?.rows,
     }))
   }
 
@@ -42,6 +44,7 @@ const flattenPluginStats = (
         key: `${pluginName}`,
         title: legacyPayload.label,
         fields: legacyPayload.fields,
+        rows: legacyPayload.rows,
       },
     ]
   }
@@ -53,10 +56,15 @@ const flattenPluginStats = (
       val && typeof val === 'object' && 'fields' in val && Array.isArray(val.fields)
         ? (val.fields as PluginStatsField[])
         : [],
+    rows:
+      val && typeof val === 'object' && 'rows' in val && Array.isArray(val.rows)
+        ? (val.rows as PluginStatsRow[])
+        : undefined,
   }))
 }
 
-const renderField = (field: PluginStatsField) => {
+const renderField = (field?: PluginStatsField) => {
+  if (!field) return <span className='font-semibold text-neutral-500 dark:text-neutral-400'>-</span>
   const display = typeof field.value === 'boolean' ? (field.value ? 'Yes' : 'No') : field.value
   return (
     <span className='inline-flex items-baseline justify-center gap-1'>
@@ -94,7 +102,9 @@ export const PluginStatsPanel = ({ pluginStats }: PluginStatsPanelProps) => {
         const flattenedRows = flattenPluginStats(pluginName, payload as PluginStatsPayload | Record<string, PluginStatsPayload>)
 
         return flattenedRows.map((row) => {
-          const columns: StatsTableColumn<{ fields: PluginStatsField[] }>[] = row.fields.map((field, idx) => ({
+          const tableRows = row.rows && row.rows.length > 0 ? row.rows : [{ key: row.key, fields: row.fields }]
+          const columnFields = tableRows[0]?.fields ?? []
+          const columns: StatsTableColumn<PluginStatsRow>[] = columnFields.map((field, idx) => ({
             key: `${row.key}-${idx}`,
             header: field.label,
             render: (p) => renderField(p.fields[idx]),
@@ -106,8 +116,8 @@ export const PluginStatsPanel = ({ pluginStats }: PluginStatsPanelProps) => {
               context={`plugin-stats-${row.key}`}
               title={row.title}
               columns={columns}
-              rows={[{ fields: row.fields }]}
-              rowKey={() => row.key}
+              rows={tableRows}
+              rowKey={(tableRow) => `${row.key}-${tableRow.key}`}
             />
           )
         })

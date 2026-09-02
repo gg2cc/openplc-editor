@@ -1197,9 +1197,15 @@ export interface PluginStatsField {
   unit?: string
 }
 
+export interface PluginStatsRow {
+  key: string
+  fields: PluginStatsField[]
+}
+
 export interface PluginStatsPayload {
   label: string
   fields: PluginStatsField[]
+  rows?: PluginStatsRow[]
   interfaces?: Record<string, PluginStatsPayload>
 }
 
