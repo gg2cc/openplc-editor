@@ -271,7 +271,7 @@ function traverseNestedNode<T>(
   } else if (typeDefinition === 'user-data-type') {
     // Structure type — STruC++ emits struct fields as `PARENT.FIELD`
     // (same convention as FB fields), no `.value.` shim.
-    const structVariables = findStructureVariables(typeName, dataTypes)
+    const structVariables = findStructureVariables(typeName, dataTypes, systemLibraries)
 
     if (!structVariables) {
       const debugVar = findDebugVariable(debugVariables, fullPath)

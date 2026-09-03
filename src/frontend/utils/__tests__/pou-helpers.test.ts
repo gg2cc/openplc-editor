@@ -300,6 +300,34 @@ describe('findStructureVariables', () => {
   it('returns null for unknown type name', () => {
     expect(findStructureVariables('UnknownType', dataTypes)).toBeNull()
   })
+
+  it('finds a structure exported by a system library', () => {
+    const libraries = [
+      {
+        name: 'lib_test_add',
+        author: '',
+        version: '0.1.1',
+        stPath: '',
+        cPath: '',
+        pous: [],
+        types: [
+          {
+            name: 'SRTWODATA',
+            kind: 'struct' as const,
+            fields: [
+              { name: 'VAR_1', type: 'DINT' },
+              { name: 'VAR_2', type: 'DINT' },
+            ],
+          },
+        ],
+      },
+    ]
+
+    expect(findStructureVariables('srTwoData', [], libraries)).toEqual([
+      { name: 'VAR_1', type: { definition: 'base-type', value: 'DINT' } },
+      { name: 'VAR_2', type: { definition: 'base-type', value: 'DINT' } },
+    ])
+  })
 })
 
 // ---------------------------------------------------------------------------

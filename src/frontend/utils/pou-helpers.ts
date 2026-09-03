@@ -175,22 +175,66 @@ export const isFunctionBlockType = (
 }
 
 /**
- * Find a structure definition by name in the project's data types.
- * Returns the variables array from the structure, or null if not found.
+ * Find a structure definition by name in project data types or system libraries.
+ * Project data types take precedence when names overlap.
  */
-export const findStructureVariables = (typeName: string, dataTypes: PLCDataType[]): PouVariable[] | null => {
+function libraryFieldType(typeName: string): PouVariable['type'] {
+  const normalized = typeName.trim()
+  const arrayMatch = /^ARRAY\s*\[([^\]]+)\]\s+OF\s+(.+)$/i.exec(normalized)
+  if (arrayMatch) {
+    const dimensions = arrayMatch[1].split(',').map((dimension) => ({ dimension: dimension.trim() }))
+    const elementType = arrayMatch[2].trim()
+    return {
+      definition: 'array',
+      value: normalized,
+      data: {
+        baseType: {
+          definition: isBaseType(elementType) ? 'base-type' : 'user-data-type',
+          value: elementType,
+        },
+        dimensions,
+      },
+    }
+  }
+
+  return {
+    definition: isBaseType(normalized) ? 'base-type' : 'user-data-type',
+    value: normalized,
+  }
+}
+
+export const findStructureVariables = (
+  typeName: string,
+  dataTypes: PLCDataType[],
+  systemLibraries: SystemLibrary[] = [],
+): PouVariable[] | null => {
   const dataType = dataTypes.find((dt) => dt.name.toLowerCase() === typeName.toLowerCase())
   if (dataType?.derivation === 'structure') {
     return dataType.variable as PouVariable[]
   }
+
+  const libraryType = systemLibraries
+    .flatMap((library) => library.types ?? [])
+    .find((type) => type.kind === 'struct' && type.name.toLowerCase() === typeName.toLowerCase())
+  if (libraryType?.fields) {
+    return libraryType.fields.map((field) => ({
+      name: field.name,
+      type: libraryFieldType(field.type),
+    }))
+  }
+
   return null
 }
 
 /**
  * Check if a type name is a structure.
  */
-export const isStructureType = (typeName: string, dataTypes: PLCDataType[]): boolean => {
-  return findStructureVariables(typeName, dataTypes) !== null
+export const isStructureType = (
+  typeName: string,
+  dataTypes: PLCDataType[],
+  systemLibraries: SystemLibrary[] = [],
+): boolean => {
+  return findStructureVariables(typeName, dataTypes, systemLibraries) !== null
 }
 
 /**
@@ -269,7 +313,7 @@ export const findLeafVariables = (
   }
 
   // Try to find as structure
-  const structVariables = findStructureVariables(typeName, dataTypes)
+  const structVariables = findStructureVariables(typeName, dataTypes, systemLibraries)
   if (structVariables) {
     for (const field of structVariables) {
       const fieldPath = pathPrefix ? `${pathPrefix}.${field.name}` : field.name

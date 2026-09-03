@@ -218,6 +218,41 @@ describe('buildDebugTree', () => {
   })
 
   describe('user-data-type (structure) variables', () => {
+    it('builds a complex node for a system library structure', () => {
+      const variable = makeUdtVariable('indata', 'SRTWODATA')
+      const debugVars = [
+        makeDebugVar('INSTANCE0.INDATA.VAR_1', 'DINT_ENUM', 20),
+        makeDebugVar('INSTANCE0.INDATA.VAR_2', 'DINT_ENUM', 21),
+      ]
+      const projectData = { dataTypes: [], pous: [] }
+      const systemLibraries = [
+        {
+          name: 'lib_test_add',
+          author: '',
+          version: '0.1.1',
+          stPath: '',
+          cPath: '',
+          pous: [],
+          types: [
+            {
+              name: 'SRTWODATA',
+              kind: 'struct' as const,
+              fields: [
+                { name: 'VAR_1', type: 'DINT' },
+                { name: 'VAR_2', type: 'DINT' },
+              ],
+            },
+          ],
+        },
+      ]
+
+      const node = buildDebugTree(variable, 'Main', INSTANCE_NAME, debugVars, projectData, systemLibraries)
+
+      expect(node.isComplex).toBe(true)
+      expect(node.children?.map((child) => child.name)).toEqual(['VAR_1', 'VAR_2'])
+      expect(node.children?.map((child) => child.debugIndex)).toEqual([20, 21])
+    })
+
     it('builds a complex node for a structure', () => {
       const structType = makeStructDataType('MyStruct', [
         makeBaseVariable('field1', 'INT'),
