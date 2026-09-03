@@ -97,3 +97,11 @@ Go to [project](https://github.com/orgs/Autonomy-Logic/projects/4) management pa
 ## Issues
 
 Go to [issues](https://github.com/Autonomy-Logic/openplc-editor/issues) page to view the current state of issues in the project.
+
+## 离线更新 strucpp
+1, 修改 openplc-editor/binary-versions.json 期望的版本
+2, cd /home/ld/OpenPLC/openplc-editor && npm install /home/ld/OpenPLC/strucpp-0.6.6.tgz --no-save
+
+## 在线更新 strucpp
+1, 修改 openplc-editor/binary-versions.json 期望的版本
+2, cd /home/ld/OpenPLC/openplc-editor && npm run setup:strucpp
