@@ -7,6 +7,7 @@ import { PlusIcon } from '../../../../assets/icons/interface/Plus'
 import { StickArrowIcon } from '../../../../assets/icons/interface/StickArrow'
 import { usePouSnapshot } from '../../../../hooks/use-pou-snapshot'
 import { useOpenPLCStore } from '../../../../store'
+import { getSystemLibraryDataTypeNames } from '../../../../utils/library-type-options'
 import { InputWithRef } from '../../../_atoms/input'
 import TableActions from '../../../_atoms/table-actions'
 import { TypeDropdownSelector } from '../../../_atoms/type-dropdown-selector'
@@ -43,6 +44,7 @@ const ArrayDataType = ({ data, ...rest }: ArrayDatatypeProps) => {
     .map((type) => type.name)
     .filter((name): name is string => typeof name === 'string' && name.length > 0)
     .filter((name) => name !== editor.meta.name && name.toUpperCase() !== 'ARRAY')
+  const systemDataTypes = getSystemLibraryDataTypeNames(sliceLibraries.system, editor.meta.name)
 
   const systemFunctionBlocks = sliceLibraries.system.flatMap((lib) =>
     (lib.pous ?? [])
@@ -62,7 +64,7 @@ const ArrayDataType = ({ data, ...rest }: ArrayDatatypeProps) => {
 
   const VariableTypes = [
     { definition: 'base-type', values: baseTypes },
-    { definition: 'user-data-type', values: userDataTypes },
+    { definition: 'user-data-type', values: [...userDataTypes, ...systemDataTypes] },
   ]
 
   const LibraryTypes = [

@@ -40,6 +40,7 @@ import type { StlibArchiveDTO } from '../../middleware/shared/ports/library-port
 import type {
   SystemLibrary,
   SystemLibraryPou,
+  SystemLibraryType,
   SystemLibraryVariable,
 } from '../../middleware/shared/ports/library-types'
 
@@ -103,6 +104,14 @@ function classFromDirection(d: 'input' | 'output' | 'inout'): SystemLibraryVaria
 export function stlibToSystemLibrary(archive: StlibArchiveDTO): SystemLibrary {
   const m = archive.manifest
   const pous: SystemLibraryPou[] = []
+  const types: SystemLibraryType[] = (m.types ?? []).map((type) => ({
+    name: type.name,
+    kind: type.kind,
+    ...(type.baseType ? { baseType: type.baseType } : {}),
+    ...(type.fields ? { fields: type.fields.map((field) => ({ name: field.name, type: field.type })) } : {}),
+    ...(type.documentation ? { documentation: type.documentation } : {}),
+    ...(type.category ? { category: type.category } : {}),
+  }))
 
   for (const fn of m.functions) {
     const variables: SystemLibraryVariable[] = [
@@ -205,6 +214,7 @@ export function stlibToSystemLibrary(archive: StlibArchiveDTO): SystemLibrary {
     stPath: '',
     cPath: '',
     pous,
+    types,
   }
   if (m.displayName) result.displayName = m.displayName
   return result

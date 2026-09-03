@@ -58,6 +58,23 @@ export interface SystemLibraryPou {
   category?: string
 }
 
+export type SystemLibraryTypeKind = 'struct' | 'enum' | 'alias'
+
+export interface SystemLibraryTypeField {
+  name: string
+  type: string
+}
+
+/** A read-only type exported by a system library. */
+export interface SystemLibraryType {
+  name: string
+  kind: SystemLibraryTypeKind
+  baseType?: string
+  fields?: SystemLibraryTypeField[]
+  documentation?: string
+  category?: string
+}
+
 export interface SystemLibrary {
   name: string
   /**
@@ -72,6 +89,7 @@ export interface SystemLibrary {
   stPath: string
   cPath: string
   pous: SystemLibraryPou[]
+  types?: SystemLibraryType[]
 }
 
 export interface UserLibrary {

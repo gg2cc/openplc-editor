@@ -116,6 +116,48 @@ describe('stlibToSystemLibrary — function blocks', () => {
   })
 })
 
+describe('stlibToSystemLibrary — exported types', () => {
+  it('preserves struct fields as read-only library type metadata', () => {
+    const lib = stlibToSystemLibrary(
+      makeArchive({
+        types: [
+          {
+            name: 'SRTWODATA',
+            kind: 'struct',
+            fields: [
+              { name: 'VAR_1', type: 'DINT' },
+              { name: 'VAR_2', type: 'DINT' },
+            ],
+          },
+        ],
+      }),
+    )
+
+    expect(lib.types).toEqual([
+      {
+        name: 'SRTWODATA',
+        kind: 'struct',
+        fields: [
+          { name: 'VAR_1', type: 'DINT' },
+          { name: 'VAR_2', type: 'DINT' },
+        ],
+      },
+    ])
+  })
+
+  it('preserves alias metadata and optional documentation', () => {
+    const lib = stlibToSystemLibrary(
+      makeArchive({
+        types: [{ name: 'COUNT', kind: 'alias', baseType: 'DINT', documentation: 'A count' }],
+      }),
+    )
+
+    expect(lib.types).toEqual([
+      { name: 'COUNT', kind: 'alias', baseType: 'DINT', documentation: 'A count' },
+    ])
+  })
+})
+
 describe('stlibToSystemLibrary — cppBlocks branch', () => {
   it('surfaces each library cpp block under the prefixed name', () => {
     const archive: StlibArchiveDTO = {

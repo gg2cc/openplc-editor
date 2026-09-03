@@ -17,6 +17,7 @@ export const TypeDropdownSelector = ({
   value,
   onSelect,
   variableTypes,
+  libraryTypes,
   disabled = false,
 }: TypeDropdownSelectorProps) => {
   const [popoverIsOpen, setPopoverIsOpen] = useState(false)
@@ -25,6 +26,7 @@ export const TypeDropdownSelector = ({
     'base-type': '',
     'user-data-type': '',
   })
+  const [libraryFilters, setLibraryFilters] = useState<Record<string, string>>({})
 
   return (
     <PrimitiveDropdown.Root onOpenChange={setPopoverIsOpen} open={popoverIsOpen}>
@@ -80,6 +82,61 @@ export const TypeDropdownSelector = ({
                         >
                           <span className='text-center font-caption text-xs font-normal text-neutral-700 dark:text-neutral-500'>
                             {_.upperCase(value)}
+                          </span>
+                        </PrimitiveDropdown.Item>
+                      ))
+                    ) : (
+                      <div className='flex h-8 items-center justify-center'>
+                        <span className='text-xs text-neutral-700 dark:text-neutral-500'>
+                          No {_.startCase(scope.definition)} found
+                        </span>
+                      </div>
+                    )}
+                  </PrimitiveDropdown.SubContent>
+                </PrimitiveDropdown.Portal>
+              </PrimitiveDropdown.Sub>
+            )
+          })}
+          {libraryTypes.map((scope) => {
+            const filterText = libraryFilters[scope.definition] || ''
+            const filteredValues = scope.values.filter((v) => v.toUpperCase().includes(filterText.toUpperCase()))
+
+            return (
+              <PrimitiveDropdown.Sub
+                key={`library-${scope.definition}`}
+                onOpenChange={() => setLibraryFilters((prev) => ({ ...prev, [scope.definition]: '' }))}
+              >
+                <PrimitiveDropdown.SubTrigger asChild className='z-50'>
+                  <div className='relative flex h-8 w-full cursor-pointer items-center justify-center py-1 outline-none hover:bg-neutral-100 dark:hover:bg-neutral-900'>
+                    <span className='text-xs text-neutral-700 dark:text-neutral-500'>
+                      {_.startCase(scope.definition)}
+                    </span>
+                    <ArrowIcon size='md' direction='right' className='absolute right-1' />
+                  </div>
+                </PrimitiveDropdown.SubTrigger>
+                <PrimitiveDropdown.Portal>
+                  <PrimitiveDropdown.SubContent
+                    sideOffset={5}
+                    className='box z-50 max-h-[300px] w-[200px] overflow-y-auto rounded-lg bg-white dark:bg-neutral-950'
+                  >
+                    <DropdownSearchInput
+                      value={filterText}
+                      onChange={(e) =>
+                        setLibraryFilters((prev) => ({
+                          ...prev,
+                          [scope.definition]: e.target.value,
+                        }))
+                      }
+                    />
+                    {filteredValues.length > 0 ? (
+                      filteredValues.map((libraryType) => (
+                        <PrimitiveDropdown.Item
+                          key={libraryType}
+                          onSelect={() => onSelect('derived', libraryType)}
+                          className='flex h-8 w-full cursor-pointer items-center justify-center py-1 outline-none hover:bg-neutral-100 dark:hover:bg-neutral-900'
+                        >
+                          <span className='text-center font-caption text-xs font-normal text-neutral-700 dark:text-neutral-500'>
+                            {_.upperCase(libraryType)}
                           </span>
                         </PrimitiveDropdown.Item>
                       ))
