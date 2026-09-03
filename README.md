@@ -59,6 +59,9 @@ To create a new release, simply create and push a new tag with the version numbe
 git push origin --delete v4.2.11.1
 git tag -d v4.2.11.1
 
+git tag v4.2.11-huiz0903
+git push origin v4.2.11-huiz0903
+
 git tag v4.2.0
 git push origin v4.2.0
 ```
@@ -100,7 +103,8 @@ Go to [issues](https://github.com/Autonomy-Logic/openplc-editor/issues) page to 
 
 ## 离线更新 strucpp
 1, 修改 openplc-editor/binary-versions.json 期望的版本
-2, cd /home/ld/OpenPLC/openplc-editor && npm install /home/ld/OpenPLC/strucpp-0.6.6.tgz --no-save
+2, cd /home/ld/OpenPLC/openplc-editor && npm install /home/ld/OpenPLC/strucpp-0.6.6.tgz --no-save (估计不能加 no-save , 下次使用的时候确认一下)
+2, cd /home/ld/OpenPLC/openplc-editor && npm install /home/ld/OpenPLC/strucpp-0.6.6.tgz
 
 ## 在线更新 strucpp
 1, 修改 openplc-editor/binary-versions.json 期望的版本
