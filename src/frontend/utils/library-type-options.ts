@@ -16,3 +16,15 @@ export function getSystemLibraryDataTypeNames(libraries: SystemLibrary[], exclud
     ),
   )
 }
+
+/** Merge type names while keeping the first spelling for each case-insensitive name. */
+export function mergeTypeNames(...nameLists: string[][]): string[] {
+  const names = new Map<string, string>()
+  for (const nameList of nameLists) {
+    for (const name of nameList) {
+      const key = name.toUpperCase()
+      if (!names.has(key)) names.set(key, name)
+    }
+  }
+  return [...names.values()]
+}

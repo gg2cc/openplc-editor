@@ -1,5 +1,5 @@
 import type { SystemLibrary } from '../../../middleware/shared/ports/library-types'
-import { getSystemLibraryDataTypeNames } from '../library-type-options'
+import { getSystemLibraryDataTypeNames, mergeTypeNames } from '../library-type-options'
 
 const library = (types: SystemLibrary['types']): SystemLibrary => ({
   name: 'test',
@@ -26,5 +26,13 @@ describe('getSystemLibraryDataTypeNames', () => {
 
   it('can exclude the current local type name', () => {
     expect(getSystemLibraryDataTypeNames([library([{ name: 'SRTWODATA', kind: 'struct' }])], 'srTwoData')).toEqual([])
+  })
+
+  it('merges local and library names without case-insensitive duplicates', () => {
+    expect(mergeTypeNames(['LocalType', 'SRTWODATA'], ['srtwodata', 'LibraryType'])).toEqual([
+      'LocalType',
+      'SRTWODATA',
+      'LibraryType',
+    ])
   })
 })

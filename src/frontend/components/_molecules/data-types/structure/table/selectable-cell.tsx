@@ -8,7 +8,7 @@ import type { PLCStructureVariable } from '../../../../../../middleware/shared/p
 import { ArrowIcon } from '../../../../../assets/icons/interface/Arrow'
 import { useOpenPLCStore } from '../../../../../store'
 import { cn } from '../../../../../utils/cn'
-import { getSystemLibraryDataTypeNames } from '../../../../../utils/library-type-options'
+import { getSystemLibraryDataTypeNames, mergeTypeNames } from '../../../../../utils/library-type-options'
 import { hasStringName, safeUpper } from '../../../../../utils/safe-upper'
 import { InputWithRef } from '../../../../_atoms/input'
 import { ArrayModal } from './elements/array-modal'
@@ -32,13 +32,12 @@ const SelectableTypeCell = ({
 
   const VariableTypes = [
     { definition: 'base-type', values: baseTypeEnum.options },
-    { definition: 'user-data-type', values: dataTypes.filter(hasStringName).map((dataType) => dataType.name) },
     {
       definition: 'user-data-type',
-      values: [
-        ...dataTypes.filter(hasStringName).map((dataType) => dataType.name),
-        ...getSystemLibraryDataTypeNames(sliceLibraries.system),
-      ],
+      values: mergeTypeNames(
+        dataTypes.filter(hasStringName).map((dataType) => dataType.name),
+        getSystemLibraryDataTypeNames(sliceLibraries.system),
+      ),
     },
   ]
 
