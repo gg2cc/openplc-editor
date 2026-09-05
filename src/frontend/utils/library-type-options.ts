@@ -6,22 +6,22 @@ const isNamed = (value: { name?: unknown }): value is { name: string } =>
 /** Return exported struct/enum/alias names for display in IEC type selectors. */
 export function getSystemLibraryDataTypeNames(libraries: SystemLibrary[], excludedName?: string): string[] {
   const excluded = excludedName?.toUpperCase()
-  return Array.from(
-    new Set(
-      libraries
-        .flatMap((library) => library.types ?? [])
-        .filter(isNamed)
-        .map((type) => type.name.toUpperCase())
-        .filter((name) => name !== 'ARRAY' && name !== excluded),
-    ),
-  )
+  const names = new Map<string, string>()
+  for (const type of libraries.flatMap((library) => library.types ?? []).filter(isNamed)) {
+    const name = type.name
+    const key = name.toUpperCase()
+    if (key === 'ARRAY' || key === excluded || names.has(key)) continue
+    names.set(key, name)
+  }
+  return [...names.values()]
 }
 
-/** Merge type names while keeping the first spelling for each case-insensitive name. */
+/** Merge sorted type groups while keeping the first spelling for each case-insensitive name. */
 export function mergeTypeNames(...nameLists: string[][]): string[] {
   const names = new Map<string, string>()
   for (const nameList of nameLists) {
-    for (const name of nameList) {
+    const sortedNames = [...nameList].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }))
+    for (const name of sortedNames) {
       const key = name.toUpperCase()
       if (!names.has(key)) names.set(key, name)
     }

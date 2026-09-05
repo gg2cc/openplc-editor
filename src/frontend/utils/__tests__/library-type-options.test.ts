@@ -29,10 +29,15 @@ describe('getSystemLibraryDataTypeNames', () => {
   })
 
   it('merges local and library names without case-insensitive duplicates', () => {
-    expect(mergeTypeNames(['LocalType', 'SRTWODATA'], ['srtwodata', 'LibraryType'])).toEqual([
-      'LocalType',
+    expect(mergeTypeNames(['zLocalType', 'aLocalType', 'SRTWODATA'], ['srtwodata', 'LibraryType'])).toEqual([
+      'aLocalType',
       'SRTWODATA',
+      'zLocalType',
       'LibraryType',
     ])
+  })
+
+  it('preserves the original library type spelling while sorting', () => {
+    expect(getSystemLibraryDataTypeNames([library([{ name: 'test123', kind: 'struct' }])])).toEqual(['test123'])
   })
 })
