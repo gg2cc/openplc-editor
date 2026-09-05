@@ -156,6 +156,42 @@ describe('stlibToSystemLibrary — exported types', () => {
       { name: 'COUNT', kind: 'alias', baseType: 'DINT', documentation: 'A count' },
     ])
   })
+
+  it('preserves array metadata on library types and struct fields', () => {
+    const lib = stlibToSystemLibrary(
+      makeArchive({
+        types: [
+          {
+            name: 'DINT_ARRAY',
+            kind: 'alias',
+            baseType: 'DINT_ARRAY',
+            arrayDimensions: [{ start: 0, end: 2 }],
+            elementTypeName: 'DINT',
+            fields: [
+              {
+                name: 'INLINE_VALUES',
+                type: 'ARRAY',
+                arrayDimensions: [{ start: 1, end: 2 }],
+                elementTypeName: 'DINT',
+              },
+            ],
+          },
+        ],
+      }),
+    )
+
+    expect(lib.types?.[0]).toMatchObject({
+      arrayDimensions: [{ start: 0, end: 2 }],
+      elementTypeName: 'DINT',
+      fields: [
+        {
+          name: 'INLINE_VALUES',
+          arrayDimensions: [{ start: 1, end: 2 }],
+          elementTypeName: 'DINT',
+        },
+      ],
+    })
+  })
 })
 
 describe('stlibToSystemLibrary — cppBlocks branch', () => {

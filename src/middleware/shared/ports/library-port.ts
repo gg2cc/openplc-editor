@@ -80,7 +80,14 @@ export interface StlibArchiveDTO {
       name: string
       kind: 'struct' | 'enum' | 'alias'
       baseType?: string
-      fields?: Array<{ name: string; type: string }>
+      arrayDimensions?: Array<{ start: number; end: number }>
+      elementTypeName?: string
+      fields?: Array<{
+        name: string
+        type: string
+        arrayDimensions?: Array<{ start: number; end: number }>
+        elementTypeName?: string
+      }>
       documentation?: string
       category?: string
     }>

@@ -253,6 +253,56 @@ describe('buildDebugTree', () => {
       expect(node.children?.map((child) => child.debugIndex)).toEqual([20, 21])
     })
 
+    it('expands inline and named arrays inside a system library structure', () => {
+      const variable = makeUdtVariable('data', 'LIB_DATA')
+      const debugVars = [
+        makeDebugVar('INSTANCE0.DATA.INLINE_VALUES[1]', 'DINT_ENUM', 30),
+        makeDebugVar('INSTANCE0.DATA.INLINE_VALUES[2]', 'DINT_ENUM', 31),
+        makeDebugVar('INSTANCE0.DATA.NAMED_VALUES[0]', 'DINT_ENUM', 32),
+        makeDebugVar('INSTANCE0.DATA.NAMED_VALUES[1]', 'DINT_ENUM', 33),
+      ]
+      const projectData = { dataTypes: [], pous: [] }
+      const systemLibraries = [
+        {
+          name: 'library',
+          author: '',
+          version: '1.0.0',
+          stPath: '',
+          cPath: '',
+          pous: [],
+          types: [
+            {
+              name: 'NAMED_VALUES',
+              kind: 'alias' as const,
+              baseType: 'NAMED_VALUES',
+              arrayDimensions: [{ start: 0, end: 1 }],
+              elementTypeName: 'DINT',
+            },
+            {
+              name: 'LIB_DATA',
+              kind: 'struct' as const,
+              fields: [
+                {
+                  name: 'INLINE_VALUES',
+                  type: 'ARRAY',
+                  arrayDimensions: [{ start: 1, end: 2 }],
+                  elementTypeName: 'DINT',
+                },
+                { name: 'NAMED_VALUES', type: 'NAMED_VALUES' },
+              ],
+            },
+          ],
+        },
+      ]
+
+      const node = buildDebugTree(variable, 'Main', INSTANCE_NAME, debugVars, projectData, systemLibraries)
+
+      expect(node.isComplex).toBe(true)
+      expect(node.children?.map((child) => child.name)).toEqual(['INLINE_VALUES', 'NAMED_VALUES'])
+      expect(node.children?.[0].children?.map((child) => child.debugIndex)).toEqual([30, 31])
+      expect(node.children?.[1].children?.map((child) => child.debugIndex)).toEqual([32, 33])
+    })
+
     it('builds a complex node for a structure', () => {
       const structType = makeStructDataType('MyStruct', [
         makeBaseVariable('field1', 'INT'),

@@ -203,6 +203,29 @@ function libraryFieldType(typeName: string): PouVariable['type'] {
   }
 }
 
+function libraryFieldTypeFromMetadata(field: {
+  type: string
+  arrayDimensions?: Array<{ start: number; end: number }>
+  elementTypeName?: string
+}): PouVariable['type'] {
+  if (field.arrayDimensions && field.elementTypeName) {
+    return {
+      definition: 'array',
+      value: field.type,
+      data: {
+        baseType: {
+          definition: isBaseType(field.elementTypeName) ? 'base-type' : 'user-data-type',
+          value: field.elementTypeName,
+        },
+        dimensions: field.arrayDimensions.map((dimension) => ({
+          dimension: `${dimension.start}..${dimension.end}`,
+        })),
+      },
+    }
+  }
+  return libraryFieldType(field.type)
+}
+
 export const findStructureVariables = (
   typeName: string,
   dataTypes: PLCDataType[],
@@ -219,7 +242,7 @@ export const findStructureVariables = (
   if (libraryType?.fields) {
     return libraryType.fields.map((field) => ({
       name: field.name,
-      type: libraryFieldType(field.type),
+      type: libraryFieldTypeFromMetadata(field),
     }))
   }
 

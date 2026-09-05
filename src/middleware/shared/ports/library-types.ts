@@ -63,6 +63,8 @@ export type SystemLibraryTypeKind = 'struct' | 'enum' | 'alias'
 export interface SystemLibraryTypeField {
   name: string
   type: string
+  arrayDimensions?: Array<{ start: number; end: number }>
+  elementTypeName?: string
 }
 
 /** A read-only type exported by a system library. */
@@ -70,6 +72,8 @@ export interface SystemLibraryType {
   name: string
   kind: SystemLibraryTypeKind
   baseType?: string
+  arrayDimensions?: Array<{ start: number; end: number }>
+  elementTypeName?: string
   fields?: SystemLibraryTypeField[]
   documentation?: string
   category?: string

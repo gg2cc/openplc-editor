@@ -19,6 +19,7 @@ import {
   findFunctionBlockExternalVariables,
   findFunctionBlockVariables,
   findStructureVariables,
+  isBaseType,
   normalizeTypeString,
 } from './pou-helpers'
 
@@ -122,17 +123,34 @@ interface ArrayTypeData {
   dimensions: Array<{ dimension: string }>
 }
 
-function findNamedArrayData(typeName: string, dataTypes: PLCDataType[]): ArrayTypeData | null {
+function findNamedArrayData(
+  typeName: string,
+  dataTypes: PLCDataType[],
+  systemLibraries: SystemLibrary[],
+): ArrayTypeData | null {
   const dataType = dataTypes.find((dt) => dt.name.toLowerCase() === typeName.toLowerCase())
-  if (dataType?.derivation !== 'array') return null
-  const baseType =
-    dataType.baseType.definition === 'base-type' || dataType.baseType.definition === 'user-data-type'
-      ? { definition: dataType.baseType.definition, value: dataType.baseType.value }
-      : null
-  if (!baseType) return null
+  if (dataType?.derivation === 'array') {
+    const baseType =
+      dataType.baseType.definition === 'base-type' || dataType.baseType.definition === 'user-data-type'
+        ? { definition: dataType.baseType.definition, value: dataType.baseType.value }
+        : null
+    if (!baseType) return null
+    return { baseType, dimensions: dataType.dimensions }
+  }
+
+  const libraryType = systemLibraries
+    .flatMap((library) => library.types ?? [])
+    .find((type) => type.name.toLowerCase() === typeName.toLowerCase())
+  if (!libraryType?.arrayDimensions || !libraryType.elementTypeName) return null
+
   return {
-    baseType,
-    dimensions: dataType.dimensions,
+    baseType: {
+      definition: isBaseType(libraryType.elementTypeName) ? 'base-type' : 'user-data-type',
+      value: libraryType.elementTypeName,
+    },
+    dimensions: libraryType.arrayDimensions.map((dimension) => ({
+      dimension: `${dimension.start}..${dimension.end}`,
+    })),
   }
 }
 
@@ -283,7 +301,7 @@ function traverseNestedNode<T>(
 
     return visitor.visitComplex(name, fullPath, compositeKey, typeName, children)
   } else if (typeDefinition === 'user-data-type') {
-    const arrayDataForType = findNamedArrayData(typeName, dataTypes)
+    const arrayDataForType = findNamedArrayData(typeName, dataTypes, systemLibraries)
     if (arrayDataForType) {
       return traverseNestedNode(
         name,
