@@ -443,7 +443,7 @@ const GlobalVariablesEditor = () => {
       {editorVariables.display === 'table' && (
         <div
           aria-label='Variables editor table container'
-          className='h-80 overflow-y-auto'
+          className='max-h-80 overflow-y-auto'
           style={{ scrollbarGutter: 'stable' }}
         >
           <GlobalVariablesTable
