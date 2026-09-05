@@ -441,7 +441,11 @@ const GlobalVariablesEditor = () => {
         </div>
       </div>
       {editorVariables.display === 'table' && (
-        <div aria-label='Variables editor table container' className='' style={{ scrollbarGutter: 'stable' }}>
+        <div
+          aria-label='Variables editor table container'
+          className='h-80 overflow-y-auto'
+          style={{ scrollbarGutter: 'stable' }}
+        >
           <GlobalVariablesTable
             tableData={tableData}
             selectedRow={parseInt(editorVariables.selectedRow)}
@@ -453,10 +457,16 @@ const GlobalVariablesEditor = () => {
       {editorVariables.display === 'code' && (
         <div
           aria-label='Variables editor code container'
-          className='h-full max-h-80 overflow-y-auto'
+          className='flex h-80 flex-col overflow-hidden'
           style={{ scrollbarGutter: 'stable' }}
         >
-          <VariablesCodeEditor code={editorCode} onCodeChange={setEditorCode} shouldUseDarkMode={shouldUseDarkMode} />
+          <div className='min-h-0 flex-1'>
+            <VariablesCodeEditor
+              code={editorCode}
+              onCodeChange={setEditorCode}
+              shouldUseDarkMode={shouldUseDarkMode}
+            />
+          </div>
 
           {parseError && <p className='mt-2 text-xs text-red-500'>Erro: {parseError}</p>}
         </div>
