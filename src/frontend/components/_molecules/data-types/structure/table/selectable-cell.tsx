@@ -126,7 +126,7 @@ const SelectableTypeCell = ({
                 ? ''
                 : definition === 'array' || definition === 'derived'
                   ? cellValue
-                  : _.upperCase(cellValue as unknown as string)}
+                  : (cellValue as unknown as string)}
             </span>
           </div>
         </PrimitiveDropdown.Trigger>
@@ -178,7 +178,7 @@ const SelectableTypeCell = ({
                           }
                           className='flex h-8 items-center justify-center hover:bg-neutral-100 dark:hover:bg-neutral-900'
                         >
-                          <span className='text-xs text-neutral-700 dark:text-neutral-500'>{_.upperCase(value)}</span>
+                          <span className='text-xs text-neutral-700 dark:text-neutral-500'>{value}</span>
                         </PrimitiveDropdown.Item>
                       ))
                     ) : (
@@ -225,7 +225,7 @@ const SelectableTypeCell = ({
                           onSelect={() => onSelect('derived', value)}
                           className='flex h-8 items-center justify-center hover:bg-neutral-100 dark:hover:bg-neutral-900'
                         >
-                          <span className='text-xs text-neutral-700 dark:text-neutral-500'>{_.upperCase(value)}</span>
+                          <span className='text-xs text-neutral-700 dark:text-neutral-500'>{value}</span>
                         </PrimitiveDropdown.Item>
                       ))
                     ) : (

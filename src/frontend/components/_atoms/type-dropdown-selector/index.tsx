@@ -32,7 +32,7 @@ export const TypeDropdownSelector = ({
     <PrimitiveDropdown.Root onOpenChange={setPopoverIsOpen} open={popoverIsOpen}>
       <PrimitiveDropdown.Trigger asChild disabled={disabled}>
         <div className='flex h-7 w-full max-w-44 cursor-pointer items-center justify-between rounded-lg border border-neutral-400 bg-white px-3 py-2 text-xs text-neutral-950 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-100'>
-          <span>{value ? _.upperCase(value) : 'Select...'}</span>
+          <span>{value || 'Select...'}</span>
           <ArrowIcon size='sm' direction='down' />
         </div>
       </PrimitiveDropdown.Trigger>
@@ -81,7 +81,7 @@ export const TypeDropdownSelector = ({
                           className='flex h-8 w-full cursor-pointer items-center justify-center py-1 outline-none hover:bg-neutral-100 dark:hover:bg-neutral-900'
                         >
                           <span className='text-center font-caption text-xs font-normal text-neutral-700 dark:text-neutral-500'>
-                            {_.upperCase(value)}
+                            {value}
                           </span>
                         </PrimitiveDropdown.Item>
                       ))
@@ -136,7 +136,7 @@ export const TypeDropdownSelector = ({
                           className='flex h-8 w-full cursor-pointer items-center justify-center py-1 outline-none hover:bg-neutral-100 dark:hover:bg-neutral-900'
                         >
                           <span className='text-center font-caption text-xs font-normal text-neutral-700 dark:text-neutral-500'>
-                            {_.upperCase(libraryType)}
+                            {libraryType}
                           </span>
                         </PrimitiveDropdown.Item>
                       ))
