@@ -301,6 +301,29 @@ describe('buildDebugTree', () => {
   })
 
   describe('array variables', () => {
+    it('expands a named array data type referenced as user-data-type', () => {
+      const namedArray: PLCDataType = {
+        name: 'DintArray',
+        derivation: 'array',
+        baseType: { definition: 'base-type', value: 'DINT' },
+        dimensions: [{ dimension: '0..2' }],
+      }
+      const variable = makeUdtVariable('values', 'DintArray')
+      const debugVars = [
+        makeDebugVar('INSTANCE0.VALUES[0]', 'DINT_ENUM', 60),
+        makeDebugVar('INSTANCE0.VALUES[1]', 'DINT_ENUM', 61),
+        makeDebugVar('INSTANCE0.VALUES[2]', 'DINT_ENUM', 62),
+      ]
+      const projectData = { dataTypes: [namedArray], pous: [] }
+
+      const node = buildDebugTree(variable, 'Main', INSTANCE_NAME, debugVars, projectData, SYSTEM_LIBS)
+
+      expect(node.isComplex).toBe(true)
+      expect(node.type).toBe('ARRAY')
+      expect(node.arrayIndices).toEqual([0, 2])
+      expect(node.children?.map((child) => child.debugIndex)).toEqual([60, 61, 62])
+    })
+
     it('builds an array node with indexed children', () => {
       const variable = makeArrayVariable('myArr', 'INT', '0..2')
       const debugVars = [

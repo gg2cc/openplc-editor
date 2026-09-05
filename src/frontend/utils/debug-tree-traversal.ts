@@ -122,6 +122,20 @@ interface ArrayTypeData {
   dimensions: Array<{ dimension: string }>
 }
 
+function findNamedArrayData(typeName: string, dataTypes: PLCDataType[]): ArrayTypeData | null {
+  const dataType = dataTypes.find((dt) => dt.name.toLowerCase() === typeName.toLowerCase())
+  if (dataType?.derivation !== 'array') return null
+  const baseType =
+    dataType.baseType.definition === 'base-type' || dataType.baseType.definition === 'user-data-type'
+      ? { definition: dataType.baseType.definition, value: dataType.baseType.value }
+      : null
+  if (!baseType) return null
+  return {
+    baseType,
+    dimensions: dataType.dimensions,
+  }
+}
+
 /**
  * Check if a type is a function block (standard library or custom).
  */
@@ -269,6 +283,20 @@ function traverseNestedNode<T>(
 
     return visitor.visitComplex(name, fullPath, compositeKey, typeName, children)
   } else if (typeDefinition === 'user-data-type') {
+    const arrayDataForType = findNamedArrayData(typeName, dataTypes)
+    if (arrayDataForType) {
+      return traverseNestedNode(
+        name,
+        fullPath,
+        compositeKey,
+        'ARRAY',
+        'array',
+        context,
+        visitor,
+        arrayDataForType,
+      )
+    }
+
     // Structure type — STruC++ emits struct fields as `PARENT.FIELD`
     // (same convention as FB fields), no `.value.` shim.
     const structVariables = findStructureVariables(typeName, dataTypes, systemLibraries)
