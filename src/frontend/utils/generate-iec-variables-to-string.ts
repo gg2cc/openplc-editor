@@ -30,7 +30,8 @@ export const generateIecVariablesToString = (variables: PLCVariable[]): string =
 
   const groupedVariables = variables.reduce(
     (acc, variable) => {
-      const key = (variable.class ?? 'global').toLowerCase()
+      const className = (variable.class ?? 'global').toLowerCase()
+      const key = `${className}:${variable.retain === true ? 'retain' : 'ordinary'}`
 
       if (!acc[key]) {
         acc[key] = []
@@ -45,11 +46,13 @@ export const generateIecVariablesToString = (variables: PLCVariable[]): string =
   const orderedGroups = ['global', 'external', 'input', 'output', 'inout', 'local', 'temp']
 
   orderedGroups.forEach((groupName) => {
-    if (groupedVariables[groupName]) {
-      const blockHeader = classToVarBlock[groupName]
+    for (const retain of [true, false]) {
+      const group = groupedVariables[`${groupName}:${retain ? 'retain' : 'ordinary'}`]
+      if (!group) continue
+      const blockHeader = `${classToVarBlock[groupName]}${retain ? ' RETAIN' : ''}`
       textualDeclaration += `${VAR_BLOCK_INDENT}${blockHeader}\n`
 
-      groupedVariables[groupName].forEach((v) => {
+      group.forEach((v) => {
         let line = `${VAR_DECL_INDENT}${v.name} : ${v.type.value}`
 
         if (v.location) {
@@ -104,7 +107,8 @@ export function getIecVariableLineMap(variables: PLCVariable[]): Map<string, { l
 
   const groupedVariables = variables.reduce(
     (acc, variable) => {
-      const key = (variable.class ?? 'global').toLowerCase()
+      const className = (variable.class ?? 'global').toLowerCase()
+      const key = `${className}:${variable.retain === true ? 'retain' : 'ordinary'}`
       if (!acc[key]) acc[key] = []
       acc[key].push(variable)
       return acc
@@ -123,14 +127,16 @@ export function getIecVariableLineMap(variables: PLCVariable[]): Map<string, { l
   // declaration counts as a line, END_VAR counts as a line.
   let currentLine = 1
   for (const groupName of orderedGroups) {
-    const group = groupedVariables[groupName]
-    if (!group) continue
-    currentLine++ // skip the VAR_xxx header line
-    for (const v of group) {
-      map.set(v.name, { line: currentLine, column: varNameColumn })
-      currentLine++ // advance past the declaration
+    for (const retain of [true, false]) {
+      const group = groupedVariables[`${groupName}:${retain ? 'retain' : 'ordinary'}`]
+      if (!group) continue
+      currentLine++ // skip the VAR_xxx header line
+      for (const v of group) {
+        map.set(v.name, { line: currentLine, column: varNameColumn })
+        currentLine++ // advance past the declaration
+      }
+      currentLine++ // skip the END_VAR line
     }
-    currentLine++ // skip the END_VAR line
   }
 
   return map

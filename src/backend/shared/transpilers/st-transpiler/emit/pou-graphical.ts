@@ -24,6 +24,7 @@ import { computeValue } from './value'
 
 interface InterfaceEntry {
   keyword: string
+  retain: boolean
   vars: TranspileVariable[]
   located?: boolean
 }
@@ -67,7 +68,8 @@ export function generateGraphicalPou(pou: TranspilePou, project: TranspileProjec
   const iface = computeInterface(pou.interface?.variables ?? [], emitted.syntheticVars)
   for (const entry of iface) {
     const variableType = locationCategory(entry.keyword)
-    program.push([`  ${entry.keyword}`, []])
+    const keyword = entry.retain ? `${entry.keyword} RETAIN` : entry.keyword
+    program.push([`  ${keyword}`, []])
     program.push(['\n', []])
     entry.vars.forEach((v, varNumber) => {
       program.push(['    ', []])
@@ -226,20 +228,23 @@ function computeInterface(variables: TranspileVariable[], syntheticVars: Synthet
     temp: varTypeNames.tempVars,
   }
   // Group by keyword, preserving IR insertion order.
-  const grouped = new Map<string, TranspileVariable[]>()
+  const grouped = new Map<string, { keyword: string; retain: boolean; vars: TranspileVariable[] }>()
   for (const v of variables) {
     const keyword = classToKeyword[v.class ?? 'local'] ?? varTypeNames.localVars
-    const bucket = grouped.get(keyword) ?? []
-    bucket.push(v)
-    grouped.set(keyword, bucket)
+    const retain = v.retain === true
+    const groupKey = `${keyword}:${retain ? 'retain' : 'ordinary'}`
+    const bucket = grouped.get(groupKey) ?? { keyword, retain, vars: [] }
+    bucket.vars.push(v)
+    grouped.set(groupKey, bucket)
   }
   // python splits each varlist into an unlocated block then a located one (DIV-03)
   const out: InterfaceEntry[] = []
-  for (const [keyword, vars] of grouped) {
+  for (const [, bucket] of grouped) {
+    const { keyword, vars } = bucket
     const unlocated = vars.filter((v) => !v.location)
     const located = vars.filter((v) => v.location)
-    if (unlocated.length > 0) out.push({ keyword, vars: unlocated })
-    if (located.length > 0) out.push({ keyword, vars: located, located: true })
+    if (unlocated.length > 0) out.push({ keyword, retain: bucket.retain, vars: unlocated })
+    if (located.length > 0) out.push({ keyword, retain: bucket.retain, vars: located, located: true })
   }
   if (syntheticVars.length > 0) {
     const synth: TranspileVariable[] = syntheticVars.map((sv) => {
@@ -257,7 +262,7 @@ function computeInterface(variables: TranspileVariable[], syntheticVars: Synthet
     if (last !== undefined && last.keyword === varTypeNames.localVars && !last.located) {
       last.vars.push(...synth)
     } else {
-      out.push({ keyword: varTypeNames.localVars, vars: synth })
+      out.push({ keyword: varTypeNames.localVars, retain: false, vars: synth })
     }
   }
   return out
