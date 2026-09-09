@@ -192,6 +192,7 @@ class MainProcessBridge implements MainIpcModule {
     // When the token authority transparently refreshes an expired token, push
     // the fresh token to the renderer so its store connection flag tracks it.
     this.tokens.onTokenChanged((newToken) => {
+      this.deviceSession.updateDebugToken(newToken)
       this.mainWindow?.webContents?.send('runtime:token-refreshed', newToken)
     })
   }
@@ -2109,12 +2110,15 @@ class MainProcessBridge implements MainIpcModule {
   private toDebugCandidate(config: DebugConnectionConfig): DeviceDebugCandidate | null {
     if (config.connectionType === 'websocket') {
       const host = config.connectionParams.ipAddress
-      const token = config.connectionParams.jwtToken
+      let token = config.connectionParams.jwtToken
       if (!host || !token) return null
       return {
         transport: 'websocket',
         descriptor: `websocket ${host}`,
         create: () => new WebSocketDebugTransport({ host, port: 8443, token, rejectUnauthorized: false }),
+        updateToken: (newToken) => {
+          token = newToken
+        },
       }
     }
     // One config in, one candidate out: this builds the DEBUG channel for a

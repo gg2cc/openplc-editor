@@ -62,6 +62,8 @@ export interface DeviceDebugCandidate {
   transport: DebugMedium
   descriptor: string
   create: () => DeviceDebugChannel
+  /** Update credentials used by a future channel created from this candidate. */
+  updateToken?: (token: string) => void
 }
 
 /** One way to reach the device, ready to be tried. */
@@ -334,6 +336,14 @@ export class DeviceSessionManager {
     this.trace(`debug channel: closing (last holder ${reason} released)`)
     this.debugClientHeld.disconnect()
     this.debugClientHeld = null
+  }
+
+  /**
+   * Keep future debug-channel opens on the current runtime credential without
+   * disturbing a channel that is already serving the debug session.
+   */
+  updateDebugToken(token: string): void {
+    this.debugCandidate?.updateToken?.(token)
   }
 
   /** Transport + endpoint of the held link, for messages and handoff decisions. */

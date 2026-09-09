@@ -105,6 +105,35 @@ describe('debug channel lifetime — a session with its own debug medium (v3 / v
     expect(created).toBe(1)
   })
 
+  it('uses a refreshed token when a later channel is created', async () => {
+    const createdTokens: string[] = []
+    const channels = [fakeDebugChannel(), fakeDebugChannel()]
+    let token = 'token-old'
+    const manager = managerWith()
+    manager.openRestSession({
+      address: '192.168.0.9',
+      debugChannel: {
+        transport: 'websocket',
+        descriptor: 'websocket 192.168.0.9',
+        create: () => {
+          createdTokens.push(token)
+          return channels.shift() as unknown as DeviceDebugChannel
+        },
+        updateToken: (newToken) => {
+          token = newToken
+        },
+      },
+    })
+
+    await manager.acquireDebugChannel('debug session')
+    manager.releaseDebugChannel('debug session')
+    manager.updateDebugToken('token-new')
+    await manager.acquireDebugChannel('debug session')
+
+    expect(createdTokens).toEqual(['token-old', 'token-new'])
+    manager.close()
+  })
+
   it('keeps the channel while a second holder still needs it', async () => {
     const channel = fakeDebugChannel()
     const manager = managerWith()
