@@ -56,8 +56,8 @@ To create a new release, simply create and push a new tag with the version numbe
 
 ```bash
 #(可选: 删除远程和本地 tag)
-git push origin --delete v4.2.11.1
-git tag -d v4.2.11.1
+git push origin --delete v4.2.11-huiz0903
+git tag -d v4.2.11-huiz0903
 
 git tag v4.2.11-huiz0903
 git push origin v4.2.11-huiz0903

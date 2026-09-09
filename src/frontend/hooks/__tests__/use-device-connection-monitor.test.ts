@@ -27,15 +27,16 @@ mockUseOpenPLCStore.getState = () => mockState
 
 const mockOnConnectionStatus = jest.fn().mockReturnValue(() => undefined)
 const mockOnLinkLog = jest.fn().mockReturnValue(() => undefined)
+const mockDevice = {
+  onConnectionStatus: mockOnConnectionStatus,
+  onLinkLog: mockOnLinkLog,
+  openRuntimeSession: mockOpenRuntimeSession,
+  closeRuntimeSession: mockCloseRuntimeSession,
+}
 
 jest.mock('../../store', () => ({ useOpenPLCStore: mockUseOpenPLCStore }))
 jest.mock('../../../middleware/shared/providers', () => ({
-  useDevice: () => ({
-    onConnectionStatus: mockOnConnectionStatus,
-    onLinkLog: mockOnLinkLog,
-    openRuntimeSession: mockOpenRuntimeSession,
-    closeRuntimeSession: mockCloseRuntimeSession,
-  }),
+  useDevice: () => mockDevice,
 }))
 jest.mock('../../services/device-link-resolution', () => ({
   resolveRuntimeDebugChannel: (...args: unknown[]) => mockResolveRuntimeDebugChannel(...(args as [])),
@@ -80,6 +81,23 @@ describe('useDeviceConnectionMonitor', () => {
       renderHook(() => useDeviceConnectionMonitor())
 
       expect(mockOpenRuntimeSession).toHaveBeenCalledWith({ address: '10.0.0.5', debug: debugChannel })
+    })
+
+    it('does not rebuild the session when the runtime token refreshes', () => {
+      mockState.runtimeConnection = { connectionStatus: 'connected', jwtToken: 'jwt-1', ipAddress: '10.0.0.5' }
+      mockState.deviceAvailableOptions = {
+        availableBoards: new Map([['OpenPLC Runtime v4', { debug: { channels: [] } }]]),
+      }
+      mockResolveRuntimeDebugChannel.mockReturnValue({
+        connectionType: 'websocket',
+        connectionParams: { ipAddress: '10.0.0.5' },
+      })
+
+      const { rerender } = renderHook(() => useDeviceConnectionMonitor())
+      mockState.runtimeConnection = { connectionStatus: 'connected', jwtToken: 'jwt-2', ipAddress: '10.0.0.5' }
+      rerender()
+
+      expect(mockOpenRuntimeSession).toHaveBeenCalledTimes(1)
     })
 
     it('closes the session when the runtime connection goes down', () => {

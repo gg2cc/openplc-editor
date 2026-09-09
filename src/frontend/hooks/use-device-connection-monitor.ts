@@ -40,7 +40,6 @@ import { useOpenPLCStore } from '../store'
 const useRuntimeSession = (): void => {
   const device = useDevice()
   const connectionStatus = useOpenPLCStore((state) => state.runtimeConnection.connectionStatus)
-  const jwtToken = useOpenPLCStore((state) => state.runtimeConnection.jwtToken)
 
   useEffect(() => {
     if (!device.openRuntimeSession) return
@@ -85,7 +84,7 @@ const useRuntimeSession = (): void => {
         })
       }
     })
-  }, [device, connectionStatus, jwtToken])
+  }, [device, connectionStatus])
 }
 
 export const useDeviceConnectionMonitor = (): void => {

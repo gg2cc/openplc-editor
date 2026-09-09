@@ -85,6 +85,7 @@ export class WebSocketDebugTransport implements DebugTransport, DeviceDebugChann
   private token: string
   private socket: Socket | null = null
   private rejectUnauthorized: boolean
+  private pendingRequests = new Set<(error: string) => void>()
 
   constructor(options: WebSocketDebugTransportOptions) {
     this.host = options.host
@@ -97,33 +98,49 @@ export class WebSocketDebugTransport implements DebugTransport, DeviceDebugChann
     return new Promise((resolve, reject) => {
       const url = `https://${this.host}:${this.port}/api/debug`
 
-      this.socket = io(url, {
+      this.disconnect()
+      const socket = io(url, {
         transports: ['websocket'],
         auth: { token: this.token },
         rejectUnauthorized: this.rejectUnauthorized,
         reconnection: false,
         timeout: CONNECT_TIMEOUT_MS,
       })
+      this.socket = socket
 
       const timeoutHandle = setTimeout(() => {
-        this.socket?.disconnect()
+        socket.disconnect()
+        if (this.socket === socket) this.socket = null
         reject(new Error('Connection timeout'))
       }, CONNECT_TIMEOUT_MS)
 
-      this.socket.on('connect_error', (error: Error) => {
+      socket.on('connect_error', (error: Error) => {
         clearTimeout(timeoutHandle)
+        if (this.socket === socket) this.socket = null
         reject(error)
       })
 
-      this.socket.io.on('error', (error: Error) => {
+      socket.io.on('error', (error: Error) => {
         clearTimeout(timeoutHandle)
+        if (this.socket === socket) this.socket = null
         reject(error)
       })
 
-      this.socket.on('connected', (data: { status: string }) => {
+      socket.on('disconnect', () => {
+        if (this.socket !== socket) return
+        this.socket = null
+        for (const fail of [...this.pendingRequests]) fail('Socket disconnected')
+      })
+
+      socket.on('connected', (data: { status: string }) => {
         clearTimeout(timeoutHandle)
-        if (data.status === 'ok') resolve()
-        else reject(new Error('Connection failed: invalid status'))
+        if (data.status === 'ok') {
+          resolve()
+        } else {
+          socket.disconnect()
+          if (this.socket === socket) this.socket = null
+          reject(new Error('Connection failed: invalid status'))
+        }
       })
     })
   }
@@ -133,6 +150,7 @@ export class WebSocketDebugTransport implements DebugTransport, DeviceDebugChann
       this.socket.disconnect()
       this.socket = null
     }
+    for (const fail of [...this.pendingRequests]) fail('Socket disconnected')
   }
 
   async getMd5Hash(): Promise<Md5ProbeResult> {
@@ -205,22 +223,40 @@ export class WebSocketDebugTransport implements DebugTransport, DeviceDebugChann
     errorMode: 'resolve' | 'reject',
   ): Promise<T> {
     const commandHex = bytesToHexSpaced(pdu)
+    const socket = this.socket
 
     return new Promise<T>((resolve, reject) => {
-      const fail = (error: string) => {
-        if (errorMode === 'reject') {
-          reject(new Error(error))
+      if (!socket) {
+        if (errorMode === 'reject') reject(new Error('Not connected to target'))
+        else resolve({ success: false, error: 'Not connected to target' } as unknown as T)
+        return
+      }
+
+      let settled = false
+      const finish = (error?: string, value?: T) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeoutHandle)
+        socket.off('debug_response', responseHandler)
+        this.pendingRequests.delete(onDisconnect)
+        if (error) {
+          if (errorMode === 'reject') reject(new Error(error))
+          else resolve({ success: false, error } as unknown as T)
         } else {
-          resolve({ success: false, error } as unknown as T)
+          resolve(value as T)
         }
+      }
+
+      const onDisconnect = (error: string) => finish(error)
+      this.pendingRequests.add(onDisconnect)
+
+      const fail = (error: string) => {
+        finish(error)
       }
 
       const timeoutHandle = setTimeout(() => fail('Request timeout'), REQUEST_TIMEOUT_MS)
 
       const responseHandler = (response: { success: boolean; data?: string; error?: string }) => {
-        clearTimeout(timeoutHandle)
-        this.socket?.off('debug_response', responseHandler)
-
         if (!response.success) {
           fail(response.error || 'Unknown error')
           return
@@ -231,14 +267,14 @@ export class WebSocketDebugTransport implements DebugTransport, DeviceDebugChann
         }
 
         try {
-          resolve(parse(hexSpacedToBytes(response.data)))
+          finish(undefined, parse(hexSpacedToBytes(response.data)))
         } catch (error) {
           fail(getErrorMessage(error))
         }
       }
 
-      this.socket!.on('debug_response', responseHandler)
-      this.socket!.emit('debug_command', { command: commandHex })
+      socket.on('debug_response', responseHandler)
+      socket.emit('debug_command', { command: commandHex })
     })
   }
 }
