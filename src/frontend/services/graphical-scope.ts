@@ -20,7 +20,7 @@
  */
 
 import type { PLCVariable } from '../../middleware/shared/ports/types'
-import type { BoundBlockPin } from '../utils/PLC/validate-variable-type'
+import type { BoundBlockPin, UserDataTypeContext } from '../utils/PLC/validate-variable-type'
 import {
   getVariableRestrictionType,
   resolveNewVariableType,
@@ -186,11 +186,12 @@ export async function isExpressionValidForType(
 export function newVariableTypeForExpected(
   expectedType: string | undefined,
   boundSiblings: BoundBlockPin[] = [],
+  context: UserDataTypeContext = {},
 ): {
   definition: PLCVariable['type']['definition']
   value: string
 } {
-  const resolved = resolveNewVariableType(expectedType, boundSiblings)
+  const resolved = resolveNewVariableType(expectedType, boundSiblings, context)
   return {
     definition: (resolved.definition as PLCVariable['type']['definition']) ?? 'base-type',
     value: resolved.value,

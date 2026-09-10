@@ -184,6 +184,37 @@ describe('resolveNewVariableType', () => {
     expect(resolveNewVariableType('MyStruct')).toEqual({ definition: 'derived', value: 'MyStruct' })
   })
 
+  it('classifies known project and system-library types as user-data-type', () => {
+    expect(
+      resolveNewVariableType('MyStruct', [], {
+        dataTypes: [{ name: 'MyStruct', derivation: 'structure', variable: [] }],
+      }),
+    ).toEqual({ definition: 'user-data-type', value: 'MyStruct' })
+
+    expect(
+      resolveNewVariableType('SRTWODATA', [], {
+        systemLibraries: [
+          {
+            name: 'lib_test_add',
+            author: '',
+            version: '0.6.6-huiz',
+            stPath: '',
+            cPath: '',
+            pous: [],
+            types: [{ name: 'SRTWODATA', kind: 'struct' }],
+          },
+        ],
+      }),
+    ).toEqual({ definition: 'user-data-type', value: 'SRTWODATA' })
+  })
+
+  it('keeps unknown non-base types as derived', () => {
+    expect(resolveNewVariableType('UnknownFB', [], { dataTypes: [], systemLibraries: [] })).toEqual({
+      definition: 'derived',
+      value: 'UnknownFB',
+    })
+  })
+
   describe('generic pins (issue #479)', () => {
     it('adopts the type already bound to another generic pin of the same block', () => {
       // MOVE: IN : ANY bound to an INT, so OUT : ANY must be an INT too.

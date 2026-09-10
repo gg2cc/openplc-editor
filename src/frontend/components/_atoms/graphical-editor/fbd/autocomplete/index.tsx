@@ -82,6 +82,8 @@ const FBDBlockAutoComplete = forwardRef<HTMLDivElement, FBDBlockAutoCompleteProp
   ({ block: unknownBlock, isOpen, setIsOpen, keyPressed, valueToSearch }: FBDBlockAutoCompleteProps, ref) => {
     const pouName = useBoundPou()
     const pous = useOpenPLCStore((state) => state.project.data.pous)
+    const dataTypes = useOpenPLCStore((state) => state.project.data.dataTypes)
+    const systemLibraries = useOpenPLCStore((state) => state.libraries.system)
     const createVariable = useOpenPLCStore((state) => state.projectActions.createVariable)
     const fbdFlows = useOpenPLCStore((state) => state.fbdFlows)
     const { updateNode, addNode } = useOpenPLCStore((state) => state.fbdFlowActions)
@@ -199,6 +201,7 @@ const FBDBlockAutoComplete = forwardRef<HTMLDivElement, FBDBlockAutoCompleteProp
       const variableType = newVariableTypeForExpected(
         expectedType,
         isVariableBox ? boundPinsOfConnectedBlock(freshRung, block.id, block.type === 'input-variable') : [],
+        { dataTypes, systemLibraries },
       )
 
       // A generic pin accepts several types, so the inferred one is a proposal,

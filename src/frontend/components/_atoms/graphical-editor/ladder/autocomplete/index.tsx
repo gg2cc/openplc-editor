@@ -84,6 +84,8 @@ const VariablesBlockAutoComplete = forwardRef<HTMLDivElement, VariablesBlockAuto
   ) => {
     const pouName = useBoundPou()
     const pous = useOpenPLCStore((state) => state.project.data.pous)
+    const dataTypes = useOpenPLCStore((state) => state.project.data.dataTypes)
+    const systemLibraries = useOpenPLCStore((state) => state.libraries.system)
     const createVariable = useOpenPLCStore((state) => state.projectActions.createVariable)
     const updateNode = useOpenPLCStore((state) => state.ladderFlowActions.updateNode)
     const openModal = useOpenPLCStore((state) => state.modalActions.openModal)
@@ -235,6 +237,7 @@ const VariablesBlockAutoComplete = forwardRef<HTMLDivElement, VariablesBlockAuto
       const variableType = newVariableTypeForExpected(
         expectedType,
         blockType === 'variable' ? boundPinsOfSameBlock(rung.nodes, block as VariableNode) : [],
+        { dataTypes, systemLibraries },
       )
 
       // A generic pin accepts several types, so the inferred one is a proposal,

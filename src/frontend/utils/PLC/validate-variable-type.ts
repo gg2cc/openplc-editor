@@ -1,6 +1,8 @@
 import { ZodLiteral } from 'zod'
 
+import type { SystemLibrary } from '../../../middleware/shared/ports/library-types'
 import { baseTypeSchema, genericTypeSchema } from '../../../middleware/shared/ports/plc-schemas'
+import type { PLCDataType } from '../../../middleware/shared/ports/types'
 
 type GenericShapeKey = keyof typeof genericTypeSchema.shape
 
@@ -152,6 +154,21 @@ export const getVariableRestrictionType = (variableType: string) => {
   }
 }
 
+export interface UserDataTypeContext {
+  dataTypes?: PLCDataType[]
+  systemLibraries?: SystemLibrary[]
+}
+
+function isKnownUserDataType(typeName: string, context: UserDataTypeContext): boolean {
+  const target = typeName.toUpperCase()
+  if (context.dataTypes?.some((dataType) => dataType.name.toUpperCase() === target)) return true
+  return (
+    context.systemLibraries?.some((library) =>
+      (library.types ?? []).some((type) => type.name.toUpperCase() === target),
+    ) ?? false
+  )
+}
+
 /**
  * A pin of the same block instance that already has a variable bound to it:
  * the pin's DECLARED type (`pinType`, possibly generic) plus the CONCRETE type
@@ -174,12 +191,22 @@ export const isGenericTypeName = (typeName: string): boolean => {
 }
 
 /** Canonical `{definition, value}` for a concrete type name, via the restriction table. */
-const newTypeFromConcrete = (concreteType: string): { definition: string | undefined; value: string } => {
+const newTypeFromConcrete = (
+  concreteType: string,
+  context: UserDataTypeContext = {},
+): { definition: string | undefined; value: string } => {
   const restriction = getVariableRestrictionType(concreteType)
   // Concrete names always come back as a single string — the array shape is
   // reserved for `ANY_*` inputs, which never reach here.
   const value = Array.isArray(restriction.values) ? restriction.values[0] : restriction.values
-  return { definition: restriction.definition, value: value ?? 'dint' }
+  const resolvedValue = value ?? 'dint'
+  return {
+    definition:
+      restriction.definition === 'derived' && isKnownUserDataType(resolvedValue, context)
+        ? 'user-data-type'
+        : restriction.definition,
+    value: resolvedValue,
+  }
 }
 
 /**
@@ -200,12 +227,13 @@ const newTypeFromConcrete = (concreteType: string): { definition: string | undef
 export const resolveNewVariableType = (
   expectedType: string | undefined,
   boundSiblings: BoundBlockPin[] = [],
+  context: UserDataTypeContext = {},
 ): { definition: string | undefined; value: string } => {
   // Box not wired to any pin — nothing constrains it.
   if (!expectedType) return { definition: 'base-type', value: 'dint' }
 
   const upperExpectedType = expectedType.toUpperCase()
-  if (!isGenericTypeName(upperExpectedType)) return newTypeFromConcrete(expectedType)
+  if (!isGenericTypeName(upperExpectedType)) return newTypeFromConcrete(expectedType, context)
 
   const inferred = boundSiblings.find(
     (sibling) =>
@@ -214,7 +242,7 @@ export const resolveNewVariableType = (
       !isGenericTypeName(sibling.variableType) &&
       validateVariableType(sibling.variableType, upperExpectedType).isValid,
   )
-  if (inferred) return newTypeFromConcrete(inferred.variableType)
+  if (inferred) return newTypeFromConcrete(inferred.variableType, context)
 
   // Nothing bound yet, so nothing to infer from (first variable on a fresh
   // block). Pick a default that at least satisfies the restriction, preferring
