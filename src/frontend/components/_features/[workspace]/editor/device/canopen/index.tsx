@@ -1016,12 +1016,12 @@ const CanopenDeviceEditor = () => {
             onValueChange={setActiveBusTab}
             className='flex flex-col gap-4'
           >
-            <Tabs.List className='flex flex-wrap gap-2 border-b border-neutral-200 pb-2 dark:border-neutral-800'>
+            <Tabs.List className='flex flex-wrap gap-1.5 rounded-md border border-neutral-200 bg-neutral-100 p-1 dark:border-neutral-800 dark:bg-neutral-900'>
               {canopenConfig.buses.map((bus, busIndex) => (
                 <Tabs.Trigger
                   key={`${bus.name || 'bus'}-${busIndex}`}
                   value={String(busIndex)}
-                  className='rounded border border-neutral-300 bg-white px-2 py-1 text-[11px] font-medium text-neutral-700 data-[state=active]:border-brand data-[state=active]:text-brand dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-300'
+                  className='rounded border border-transparent bg-transparent px-3 py-1.5 text-[11px] font-medium text-neutral-600 transition-all hover:bg-white hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 data-[state=active]:border-brand data-[state=active]:bg-brand data-[state=active]:text-white data-[state=active]:shadow-sm dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-brand-light dark:data-[state=active]:border-brand-light dark:data-[state=active]:bg-brand dark:data-[state=active]:text-white'
                 >
                   {bus.name || `bus${busIndex + 1}`} ({bus.interface || 'can0'})
                 </Tabs.Trigger>
@@ -1217,12 +1217,12 @@ const CanopenDeviceEditor = () => {
                       onValueChange={(value) => setActiveSlaveTab((prev) => ({ ...prev, [busIndex]: value }))}
                       className='flex flex-col gap-3'
                     >
-                      <Tabs.List className='flex flex-wrap gap-2 border-b border-neutral-200 pb-2 dark:border-neutral-800'>
+                      <Tabs.List className='flex flex-wrap gap-1.5 rounded-md border border-neutral-200 bg-neutral-100 p-1 dark:border-neutral-800 dark:bg-neutral-900'>
                         {(bus.slaves ?? [defaultCanopenSlave()]).map((slave, slaveIndex) => (
                           <Tabs.Trigger
                             key={`${bus.name}-slave-${slaveIndex}`}
                             value={String(slaveIndex)}
-                            className='rounded border border-neutral-300 bg-white px-2 py-1 text-[11px] font-medium text-neutral-700 data-[state=active]:border-brand data-[state=active]:text-brand dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-300'
+                            className='rounded border border-transparent bg-transparent px-3 py-1.5 text-[11px] font-medium text-neutral-600 transition-all hover:bg-white hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 data-[state=active]:border-brand data-[state=active]:bg-brand data-[state=active]:text-white data-[state=active]:shadow-sm dark:text-neutral-400 dark:hover:bg-neutral-800 dark:hover:text-brand-light dark:data-[state=active]:border-brand-light dark:data-[state=active]:bg-brand dark:data-[state=active]:text-white'
                           >
                             {slave.name || `slave_${slaveIndex + 1}`} (NID {slave.nodeId})
                           </Tabs.Trigger>
