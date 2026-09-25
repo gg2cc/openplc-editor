@@ -136,48 +136,40 @@ function emitGlobalVarList(
   if (variables.length === 0) return
 
   const variableType = 'var_local'
+  const range: [number, number] = [0, variables.length]
 
-  // RETAIN is a declaration-block modifier in IEC 61131-3. Split the
-  // configuration globals into contiguous blocks so STruC++ can carry the
-  // modifier into the generated debug/retain table.
-  let blockStart = 0
-  while (blockStart < variables.length) {
-    const retain = variables[blockStart].retain === true
-    let blockEnd = blockStart + 1
-    while (blockEnd < variables.length && (variables[blockEnd].retain === true) === retain) {
-      blockEnd++
-    }
+  out.push([`${indent}VAR_GLOBAL`, []])
+  // CONSTANT / RETAIN / NON_RETAIN modifiers come from the
+  // <globalVars> wrapper in the DOM path; the IR doesn't surface
+  // per-list modifiers today (only the bare variable list).
+  void range
+  void tagname
+  out.push(['\n', []])
 
-    out.push([`${indent}VAR_GLOBAL${retain ? ' RETAIN' : ''}`, []])
-    out.push(['\n', []])
+  variables.forEach((variable, idx) => {
+    out.push([_varIndent, []])
+    out.push([variable.name, [tagname, variableType, idx, 'name']])
+    out.push([' ', []])
 
-    for (let idx = blockStart; idx < blockEnd; idx++) {
-      const variable = variables[idx]
-      out.push([_varIndent, []])
-      out.push([variable.name, [tagname, variableType, idx, 'name']])
+    if (variable.location) {
+      out.push(['AT ', []])
+      out.push([variable.location, [tagname, variableType, idx, 'location']])
       out.push([' ', []])
-
-      if (variable.location) {
-        out.push(['AT ', []])
-        out.push([variable.location, [tagname, variableType, idx, 'location']])
-        out.push([' ', []])
-      }
-
-      out.push([': ', []])
-      out.push([getTypeAsText(variable), [tagname, variableType, idx, 'type']])
-
-      if (variable.initialValue !== undefined && variable.initialValue !== '') {
-        const declaredType = declaredTypeName(variable)
-        out.push([' := ', []])
-        out.push([
-          computeValue(project, variable.initialValue, declaredType),
-          [tagname, variableType, idx, 'initial value'],
-        ])
-      }
-      out.push([';\n', []])
     }
 
-    out.push([`${indent}END_VAR\n`, []])
-    blockStart = blockEnd
-  }
+    out.push([': ', []])
+    out.push([getTypeAsText(variable), [tagname, variableType, idx, 'type']])
+
+    if (variable.initialValue !== undefined && variable.initialValue !== '') {
+      const declaredType = declaredTypeName(variable)
+      out.push([' := ', []])
+      out.push([
+        computeValue(project, variable.initialValue, declaredType),
+        [tagname, variableType, idx, 'initial value'],
+      ])
+    }
+    out.push([';\n', []])
+  })
+
+  out.push([`${indent}END_VAR\n`, []])
 }
