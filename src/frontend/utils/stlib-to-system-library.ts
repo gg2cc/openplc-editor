@@ -108,18 +108,7 @@ export function stlibToSystemLibrary(archive: StlibArchiveDTO): SystemLibrary {
     name: type.name,
     kind: type.kind,
     ...(type.baseType ? { baseType: type.baseType } : {}),
-    ...(type.arrayDimensions ? { arrayDimensions: type.arrayDimensions } : {}),
-    ...(type.elementTypeName ? { elementTypeName: type.elementTypeName } : {}),
-    ...(type.fields
-      ? {
-          fields: type.fields.map((field) => ({
-            name: field.name,
-            type: field.type,
-            ...(field.arrayDimensions ? { arrayDimensions: field.arrayDimensions } : {}),
-            ...(field.elementTypeName ? { elementTypeName: field.elementTypeName } : {}),
-          })),
-        }
-      : {}),
+    ...(type.fields ? { fields: type.fields.map((field) => ({ name: field.name, type: field.type })) } : {}),
     ...(type.documentation ? { documentation: type.documentation } : {}),
     ...(type.category ? { category: type.category } : {}),
   }))
