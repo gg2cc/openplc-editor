@@ -75,8 +75,16 @@ export interface DeviceLicenseStatusProps {
   isChecking: boolean
   /** Null when no valid purchase link can be built; the button is then hidden. */
   buyUrl: string | null
+  /**
+   * True while the purchase watch runs — `buy` opened the external purchase
+   * page and OpenPLC is polling so it can write the licence on its own. The
+   * badge then reads "Waiting for purchase…" (unless the last report is a
+   * check-failed, which outranks the wait) and the panel can stop it.
+   */
+  awaitingPurchase: boolean
   onBuy: () => void
   onRecheck: () => void
+  onCancelPurchaseWatch: () => void
 }
 
 /** The label + icon for an outcome. One place, so no branch can drift. */
@@ -118,20 +126,28 @@ function describeOutcome(report: DeviceLicenseReport): {
         Icon: ShieldUnknownIcon,
         negative: false,
         detail:
-          'The firmware running on this device reports no licence storage. This hardware supports it, ' +
-          'so the image was built without the storage backend — rebuild and upload.',
+          'The firmware on this device reports no licence storage. This hardware supports it, ' +
+          'so the image was built without the storage backend. Rebuild and upload.',
       }
     case 'check-failed':
       return {
         label: 'Licence check failed',
         Icon: ShieldUnknownIcon,
         negative: false,
-        detail: `${report.outcome.error}\n\nThis is not the same as having no licence — nothing on the device has changed.`,
+        detail: `${report.outcome.error}\n\nThis is not the same as having no licence. Nothing on the device has changed.`,
       }
   }
 }
 
-export function DeviceLicenseStatus({ report, isChecking, buyUrl, onBuy, onRecheck }: DeviceLicenseStatusProps) {
+export function DeviceLicenseStatus({
+  report,
+  isChecking,
+  buyUrl,
+  awaitingPurchase,
+  onBuy,
+  onRecheck,
+  onCancelPurchaseWatch,
+}: DeviceLicenseStatusProps) {
   const [copied, setCopied] = useState(false)
 
   // Nothing has run: every non-licensable board stays here, and so does a
@@ -148,10 +164,38 @@ export function DeviceLicenseStatus({ report, isChecking, buyUrl, onBuy, onReche
   const { label, Icon, negative, detail } = describeOutcome(report)
   const deviceId = report.deviceId
 
+  // The watch outranks the tick, but never a FAILURE. While the watch runs,
+  // every periodic refresh flips `isChecking` on and off, and a badge
+  // alternating "Waiting…"/"Checking…" reads as flapping when it is one
+  // continuous wait — so the waiting label absorbs the ticks. A check-failed
+  // report is different: it means the ticks currently cannot see the device,
+  // and a calm "Waiting for purchase…" over that would hide a dead link for
+  // up to ten minutes. The failure label (and its normal styling) wins, held
+  // steady across ticks; the watch keeps running underneath.
+  const checkFailed = report.outcome.state === 'check-failed'
+  const showWaiting = awaitingPurchase && !checkFailed
+  const badgeLabel = showWaiting
+    ? 'Waiting for purchase…'
+    : isChecking && !awaitingPurchase
+      ? 'Checking licence…'
+      : label
+
   // The purchase button appears ONLY where buying is the honest next step: the
   // backend was asked and reported no entitlement. On `check-failed` or an
-  // unchecked `unlicensed` it would be a guess, and a costly one.
-  const offerPurchase = !!buyUrl && report.outcome.state === 'unlicensed' && report.outcome.entitlementChecked === true
+  // unchecked `unlicensed` it would be a guess, and a costly one. While the
+  // watch runs the step was already taken — offering it again mid-wait invites
+  // a double purchase.
+  const offerPurchase =
+    !!buyUrl && !awaitingPurchase && report.outcome.state === 'unlicensed' && report.outcome.entitlementChecked === true
+
+  // "Check again" is the panel's default affordance, and rightly so: almost
+  // every state gets better by asking again. The exception is a check-failed
+  // the flow marked terminal — a board with no identity to bind a licence to, a
+  // firmware speaking an identity format this editor does not know. Re-asking
+  // reproduces the same error verbatim, so the button turns a legible message
+  // into a loop. The modal already withholds it for these; the panel used to
+  // offer it anyway, which is the same disagreement rendered in two places.
+  const offerRecheck = !(report.outcome.state === 'check-failed' && report.outcome.retryable === false)
 
   return (
     // Radix Popover, PORTALLED. The details used to be a conditional <div> in the
@@ -171,9 +215,13 @@ export function DeviceLicenseStatus({ report, isChecking, buyUrl, onBuy, onReche
               : 'text-neutral-600 hover:text-neutral-950 dark:text-neutral-400 dark:hover:text-white',
           )}
         >
-          {isChecking ? <ShieldUnknownIcon size={10} /> : <Icon size={10} />}
-          <span className={cn(negative && 'border-b border-dashed border-neutral-400 dark:border-neutral-700')}>
-            {isChecking ? 'Checking licence…' : label}
+          {showWaiting || isChecking ? <ShieldUnknownIcon size={10} /> : <Icon size={10} />}
+          <span
+            className={cn(
+              negative && !showWaiting && 'border-b border-dashed border-neutral-400 dark:border-neutral-700',
+            )}
+          >
+            {badgeLabel}
           </span>
         </button>
       </Popover.Trigger>
@@ -226,21 +274,43 @@ export function DeviceLicenseStatus({ report, isChecking, buyUrl, onBuy, onReche
             </div>
           ) : null}
 
-          <div className='flex items-center gap-3'>
-            <button
-              type='button'
-              disabled={isChecking}
-              onClick={onRecheck}
-              className='font-caption text-cp-xs text-neutral-600 hover:underline disabled:opacity-50 dark:text-neutral-400'
-            >
-              Check again
-            </button>
-            {offerPurchase ? (
-              <button type='button' onClick={onBuy} className='font-caption text-cp-xs text-brand hover:underline'>
-                Buy licence
-              </button>
-            ) : null}
-          </div>
+          {awaitingPurchase ? (
+            <p className='font-caption text-cp-sm text-neutral-600 dark:text-neutral-400'>
+              Waiting for the purchase to complete. OpenPLC keeps checking for up to ten minutes and writes the licence
+              to this device as soon as the purchase clears. You can keep working in the meantime.
+            </p>
+          ) : null}
+
+          {/* Skipped entirely when nothing is offered: an empty flex row still
+              costs the popover's 12px gap, which reads as a missing control. */}
+          {offerRecheck || offerPurchase || awaitingPurchase ? (
+            <div className='flex items-center gap-3'>
+              {offerRecheck ? (
+                <button
+                  type='button'
+                  disabled={isChecking}
+                  onClick={onRecheck}
+                  className='font-caption text-cp-xs text-neutral-600 hover:underline disabled:opacity-50 dark:text-neutral-400'
+                >
+                  Check again
+                </button>
+              ) : null}
+              {offerPurchase ? (
+                <button type='button' onClick={onBuy} className='font-caption text-cp-xs text-brand hover:underline'>
+                  Buy licence
+                </button>
+              ) : null}
+              {awaitingPurchase ? (
+                <button
+                  type='button'
+                  onClick={onCancelPurchaseWatch}
+                  className='font-caption text-cp-xs text-neutral-600 hover:underline dark:text-neutral-400'
+                >
+                  Stop waiting
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>

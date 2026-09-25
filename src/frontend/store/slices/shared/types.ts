@@ -24,10 +24,6 @@ import type { TabsSlice } from '../tabs'
 import type { VersionControlSlice } from '../version-control'
 import type { WorkspaceSlice } from '../workspace'
 
-// ---------------------------------------------------------------------------
-// Root state type for shared slice (it orchestrates across all slices)
-// ---------------------------------------------------------------------------
-
 export type SharedRootState = AISlice &
   ProjectSlice &
   FileSlice &
@@ -45,19 +41,11 @@ export type SharedRootState = AISlice &
   VersionControlSlice &
   SharedSlice
 
-// ---------------------------------------------------------------------------
-// Response type
-// ---------------------------------------------------------------------------
-
 export type SharedResponse = {
   ok: boolean
   title?: string
   message?: string
 }
-
-// ---------------------------------------------------------------------------
-// POU History (undo/redo)
-// ---------------------------------------------------------------------------
 
 export type PouHistorySnapshot = {
   variables: PLCVariable[]
@@ -77,10 +65,6 @@ export type PouHistory = {
   /** Depth of the past stack when the file was last saved. null = never saved or diverged. */
   savedAtDepth: number | null
 }
-
-// ---------------------------------------------------------------------------
-// Shared Slice Actions
-// ---------------------------------------------------------------------------
 
 export type PouActions = {
   create: (args: {
@@ -109,15 +93,37 @@ export type PendingDatatypeRename = {
   resolve: (confirmed: boolean) => void
 }
 
+/** A delete waiting on the reference-impact modal. Nothing awaits it, so
+ *  no resolver: confirm runs `datatypeActions.delete`, cancel drops it. */
+export type PendingDatatypeDelete = {
+  name: string
+  impact: DataTypeReferenceImpactAnalysis
+}
+
+/** Global Variable Lists — the object CODESYS calls a GVL. */
+export type GlobalVariableListActions = {
+  /** Create the list and open its tab, as every other + button element does. */
+  create: (name: string) => SharedResponse
+  /** Ask for confirmation; the modal calls `delete`. */
+  deleteRequest: (name: string) => void
+  delete: (name: string) => void
+  rename: (oldName: string, newName: string) => SharedResponse
+  duplicate: (sourceName: string, newName: string) => SharedResponse
+}
+
 export type DatatypeActions = {
   create: (args: { name: string; derivation: 'array' | 'enumerated' | 'structure' }) => SharedResponse
+  /** Opens the confirm modal — or the reference-impact modal when the type is still referenced. */
   deleteRequest: (name: string) => void
+  /** Unconditional; the reference gate lives in `deleteRequest`. */
   delete: (name: string) => SharedResponse
   /** Async: a rename of a referenced type awaits the impact modal before
    *  propagating the new name into every reference. Cancel = no state change. */
   rename: (oldName: string, newName: string) => Promise<DatatypeRenameResponse>
   /** Confirm (`true`) or cancel (`false`) the pending rename's impact modal. */
   respondToPendingRename: (confirmed: boolean) => void
+  /** Confirm (`true`) or cancel (`false`) the pending delete's impact modal. */
+  respondToPendingDelete: (confirmed: boolean) => void
   duplicate: (sourceName: string, newName: string) => SharedResponse
 }
 
@@ -126,6 +132,7 @@ export type ServerActions = {
   deleteRequest: (name: string) => void
   delete: (name: string) => SharedResponse
   rename: (oldName: string, newName: string) => SharedResponse
+  duplicate: (sourceName: string, newName: string) => SharedResponse
 }
 
 export type RemoteDeviceActions = {
@@ -136,6 +143,8 @@ export type RemoteDeviceActions = {
   deleteRequest: (name: string) => void
   delete: (name: string) => SharedResponse
   rename: (oldName: string, newName: string) => SharedResponse
+  /** The copy gets fresh ids and no alias/address bindings — see the implementation. */
+  duplicate: (sourceName: string, newName: string) => SharedResponse
 }
 
 export type EtherCATDeviceActions = {
@@ -162,17 +171,21 @@ export type OpenProjectResponseData = {
    *  (per-board dict and legacy flat array); see
    *  `DeviceActions.setDeviceDefinitions` for the migration. */
   devicePinMapping?: DevicePin[] | Record<string, DevicePin[]>
-  /** Warnings from parsing (e.g. dropped files that failed validation). */
+  /** Warnings from parsing (e.g. dropped files that failed validation).
+   *  Recoverable: the project opens normally and these surface in the Console. */
   warnings?: string[]
+  /** Non-empty opens the project EMPTY and read-only: partial content would look legitimate, and the first save
+   *  would overwrite the user's real diagram. */
+  fatalErrors?: string[]
   /** `datatypes/*.dt` files that failed to parse on load, preserved
    *  raw so the save flow echoes them back verbatim. */
   unparsedDataTypeFiles?: RawProjectFile[]
-  /**
-   * Edit permission flag forwarded from `ProjectResponse.data.canEdit`.
-   * `false` puts the workspace in read-only mode; `true` / `undefined`
-   * keep it fully editable.  Absent ⇒ desktop editor or dev-local; both
-   * have no remote permission concept so the editor stays unrestricted.
-   */
+  /** True when the project still carries its data types inline in
+   *  `project.json` with no `datatypes/*.dt` on disk and still owes a migration. */
+  dataTypesNeedMigration?: boolean
+  /** Keyed by relative path; echoed back verbatim for unedited files. */
+  rawLoadedFiles?: Record<string, string>
+  /** `false` puts the workspace in read-only mode; absent means desktop/dev-local, which stay unrestricted. */
   canEdit?: boolean
 }
 
@@ -183,27 +196,27 @@ export type SharedWorkspaceActions = {
   closeFile: (name: string) => { success: boolean }
   /** Remove a tab and select the next one. Does NOT check save state. */
   forceCloseFile: (name: string) => { success: boolean }
-  /**
-   * Close project: checks save state, shows save-changes modal if unsaved,
-   * or clears all state if saved. Returns `{ pendingConfirmation: true }`
-   * when the modal was opened so the caller can defer post-close work
-   * (e.g. host navigation) until the modal resolves.
-   */
+  /** `{ pendingConfirmation: true }` means the modal was opened, so the caller can defer post-close work
+   *  (e.g. host navigation) until it resolves. */
   closeProject: () => { pendingConfirmation: boolean }
+  /** The same rule `closeProject` applies, exposed for a caller that REPLACES the project rather than
+   *  closing it, so both stay in step. */
+  hasUnsavedChanges: () => boolean
   /** Reset all slice state for project close. */
   clearStatesOnCloseProject: () => void
-  /**
-   * Populate store with project data returned from a ProjectPort open call.
-   * Sets project state, device config, files, libraries, flows, and opens main POU tab.
-   */
   handleOpenProjectResponse: (data: OpenProjectResponseData) => void
+  /** Shared tail of both platforms' retrieve adapters: load the project, and mark it as having no location
+   *  the user chose. */
+  openRetrievedProject: (data: OpenProjectResponseData) => void
 }
 
 export type SharedSlice = {
   undoRedo: Record<string, PouHistory>
   pendingDatatypeRename: PendingDatatypeRename | null
+  pendingDatatypeDelete: PendingDatatypeDelete | null
   pouActions: PouActions
   datatypeActions: DatatypeActions
+  globalVariableListActions: GlobalVariableListActions
   serverActions: ServerActions
   remoteDeviceActions: RemoteDeviceActions
   ethercatDeviceActions: EtherCATDeviceActions

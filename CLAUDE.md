@@ -30,6 +30,60 @@ npm run test:e2e         # Playwright E2E tests
 npm run validate:arch    # Architecture layer dependency validation
 ```
 
+## Verify before pushing (CI parity)
+
+CI runs these commands directly — NOT `npm run lint` / `npm run format`, which
+AUTO-FIX and so pass locally while CI's `--check` still fails. Tests run under
+**Jest** (not Vitest), and both `tsc` and `jest` import the `strucpp` package,
+so it must be installed first or they fail with `TS2307: Cannot find module
+'strucpp'`. Run each exact command (from `.github/workflows/`) green before you push:
+
+```bash
+npm ci --ignore-scripts && npm run setup:strucpp   # required first, or tsc/jest can't resolve 'strucpp'
+npx tsc --noEmit                                   # ci-build:       Build Check
+npx prettier --check "./src/**/*.{ts,tsx}"         # ci-format:      Format Check
+npx eslint "./src/**/*.{ts,tsx}"                   # ci-lint:        Lint Check
+npx jest --config jest.config.json --collectCoverage --ci   # ci-unit-tests
+```
+
+`prettier --check` only reports; fix with `npx prettier --write <files>`.
+
+`npm run setup:strucpp` installs the **pinned** STruC++ from its GitHub release
+and overwrites whatever is in `node_modules/strucpp`, so a locally patched build
+(testing an unreleased parser change) is wiped by the very command CI runs. Jest
+loads the parser through `dist/parser-bundle.cjs` — STruC++'s ESM chain does not
+survive Jest's CJS transform — so the pinned release has to be one that ships
+that bundle, or every suite fails to load. Run the suite again after
+`setup:strucpp` rather than trusting a run made against a patched install.
+The shared surface (`src/frontend`, `src/middleware/shared`, `src/backend/shared`)
+is byte-identical with **openplc-web** — mirror any change and run the check suite
+in BOTH repos (web uses **Vitest**, not Jest, so a test can pass here and fail there).
+
+## Electron e2e (Playwright)
+
+No CI workflow runs Playwright, so these are local checks. `e2e/` drives the real
+Electron app through `_electron.launch`, and three things bite before any assertion:
+
+```bash
+npm run build                                          # main + renderer
+mkdir -p release/app/configs/dll
+cp release/app/dist/main/preload.js release/app/configs/dll/preload.js
+npx playwright test e2e/<spec>.ts --workers=1
+```
+
+- **The preload copy is required.** `main.ts` picks the preload with `app.isPackaged`,
+  and a suite launching `release/app/dist/main/main.js` directly is NOT packaged, so it
+  looks under `release/app/configs/dll/` - a path `npm run build` never writes. Without
+  it the window renders blank and the only clue is `Cannot read properties of undefined
+  (reading 'onSimulatorStopped')` in the renderer console.
+- **Do not set `NODE_ENV=development`.** `resolveHtmlPath` would point the window at the
+  webpack dev server on `localhost:1212`, which is not running against a built app.
+- **`firstWindow()` returns the splash**, which then closes. Poll `app.windows()` for the
+  one whose URL contains `index.html`.
+
+Every open tab keeps its Monaco editor mounted (hidden with `display: none`), so read
+body text from `.view-lines:visible`, never `.view-lines` alone.
+
 ## Architecture
 
 ### Layer Overview
@@ -160,6 +214,7 @@ const createPou = useOpenPLCStore((s) => s.projectActions.createPou)
 | `console` | Log output |
 | `library` | System + user function block libraries |
 | `file` | File save states (dirty tracking) |
+| `print` | Print/export-to-PDF selection, render mode, page policy, page setup |
 | `ai`, `history`, `modal`, `readme`, `search`, `shared`, `version-control`, `webrtc` | Supporting features |
 
 **Conventions:**
@@ -217,6 +272,37 @@ Structured Text is generated in-process by the TS transpiler
 legacy `xml2st` binary path has been retired. `XmlGenerator` is kept only for
 the "Export Project as XML" feature.
 
+**The Modbus block of `defines.h` has two sources**, split along the ownership
+boundary (`src/backend/shared/compile/steps/modbus-defines.ts`):
+
+- the project's Modbus `PLCServer` says **what is served** — the transports,
+  the slave id, the TCP port, and the speed of a UART of its own. On every
+  target, baremetal included.
+- the board's VPP screens say **what it is served over** — the default UART's
+  speed, the RS-485 pin, the network. `serial` and `network` sections.
+
+The default UART's speed is the one thing on that line the server does not own,
+because it is the editor's own link and a UART has one speed. `resolveServerBaud`
+in `middleware/shared/utils/modbus-server-profile/baud.ts` decides between the
+two, and the SCREEN calls it as well — a hook cannot import `backend/shared`, and
+two copies of that chain is how a screen ends up disagreeing with the firmware.
+
+A firmware build serves exactly one slave (`modbus.slaveid` is a single global),
+so `selectModbusServer` refuses a build with more than one enabled server and
+names them. The editor still allows several, because a project moves between
+targets.
+
+The editor's own link is deliberately NOT derived from the server. `DEBUG_BAUD`
+comes from `screens.serial.baud_rate` — that UART's speed is the package's to
+state — and `DEBUG_SLAVE` is the constant 1, so a project with no Modbus server
+still debugs and changing a server's slave id is not an access event.
+
+On the default UART the firmware answers **both** ids and routes by function
+code: `0x41`-`0x4B` on the editor's, everything on the server's. So a server
+sharing that port keeps whatever id the user picked, and `MBSERIAL_SLAVE` is the
+server's on every port. A board flashed before 4.3.0 may answer the editor on
+another id; Connect tries 1 first and the project's legacy id after.
+
 Platform-specific binaries in `/resources/bin/[platform]/[arch]/`. Board configs in `src/backend/shared/firmware/hals.json`.
 
 ### Debugging
@@ -231,14 +317,23 @@ Platform-specific binaries in `/resources/bin/[platform]/[arch]/`. Board configs
 - **Framework:** Jest + jsdom
 - **Test files:** `*.test.ts(x)`, `*.spec.ts(x)`, or `__tests__/` directories
 - **E2E:** Playwright (`/e2e`), Chromium only
-- **Coverage thresholds** (100% functions/lines/statements required):
-  - `src/frontend/store/slices/`
-  - `src/frontend/utils/`
-  - `src/backend/shared/`
-  - `src/middleware/adapters/editor/`
+- **Coverage thresholds** — per-directory and aggregate, enforced by
+  `jest.config.json`. Branch coverage is not gated anywhere (`branches: 0`);
+  read the config for the current numbers rather than trusting this table:
+
+  | Directory | statements | lines | functions |
+  |---|---|---|---|
+  | `src/frontend/store/slices/` | 97 | 98 | 98 |
+  | `src/frontend/utils/` | 95 | 95 | 97 |
+  | `src/backend/shared/` | 75 | 77 | 76 |
+  | `src/middleware/adapters/editor/` | 85 | 85 | 87 |
+
+  They are floors for the directory as a whole, not a per-file rule, so a new
+  file is not obliged to reach 100% on its own — but it must not drag the
+  directory below the floor.
 - **Mocks:** `configs/mocks/` for file stubs; `identity-obj-proxy` for CSS modules
 
-When adding new code to covered directories, you must add corresponding tests to maintain 100% coverage.
+When adding new code to a covered directory, add tests with it: the directory has to stay above its floor, and an untested file is what pushes it under.
 
 ## Code Style
 
@@ -278,6 +373,7 @@ When adding new code to covered directories, you must add corresponding tests to
 - **Socket.io** for real-time communication
 - **Winston** for structured logging (main process)
 - **serialport** for serial communication
+- **pdf-lib** + **@pdf-lib/fontkit** for PDF export (print/export-to-PDF)
 
 ## Important Patterns
 
@@ -290,11 +386,26 @@ The About modal renders it directly; the web build writes it into `version.json`
 **Bump `APP_VERSION` — never `package.json` alone.** Make the identical one-line
 edit in BOTH repos, and set `package.json.version` to the same value in both so
 they can't drift. Roles: `APP_VERSION` is what the user sees in the About dialog;
-`package.json.version` is what electron-builder stamps on the desktop binary and
-what the release tag `vX.Y.Z` must match. Bumping only `package.json` leaves the
-About dialog stuck on the old version — **this mistake shipped 4.2.7 and 4.2.8
-with About still showing 4.2.6.** If the two ever disagree, `APP_VERSION` is
-authoritative; fix it to match.
+`package.json.version` is what a local build stamps. Bumping only `package.json`
+leaves the About dialog stuck on the old version — **this mistake shipped 4.2.7
+and 4.2.8 with About still showing 4.2.6.** If those two disagree, `APP_VERSION`
+is authoritative; fix `package.json` to match.
+
+**The release tag must equal `APP_VERSION` too.** `release.yml` stamps the binary
+from the tag while About renders `APP_VERSION`, so tagging `v4.3.0` while
+`APP_VERSION` is 4.2.12 ships an installer named 4.3.0 whose About dialog says
+4.2.12 — the same failure in a different disguise. Check before tagging: a pushed
+tag cannot be "fixed to match".
+
+In the editor, electron-builder reads **`release/app/package.json`**, not the root
+one — `electron-builder.json` sets `directories.app` to `release/app`. The release
+workflow runs `npm version <tag>` at the root AND in `release/app`, so a
+*tag-triggered* release is always correct. Two cases are not: a LOCAL package
+build takes whatever `release/app/package.json` says, and a `workflow_dispatch`
+run with an empty `version` input falls back to root `package.json`
+(`release.yml`, version resolution). Use `npm version <v> --no-git-tag-version
+--allow-same-version` in both places rather than editing by hand: it updates each
+lockfile too, which hand edits miss (see DOPE-601).
 
 Release order: bump `APP_VERSION` + `package.json` (both repos, same value) → PR
 to `development` → merge → promote `development`→`main` on both → tag `vX.Y.Z` on
@@ -313,7 +424,7 @@ on its `main` push. (Ideally `package.json.version` should be derived from
 1. Create `types.ts`, `slice.ts`, `index.ts` in `src/frontend/store/slices/<name>/`
 2. Add the slice type to `RootState` union in `src/frontend/store/index.ts`
 3. Spread the slice creator in `createOpenPLCStore()`
-4. Add tests to maintain 100% coverage
+4. Add tests with it, so the directory stays above its coverage floor
 
 ### When adding a new POU language or type:
 1. Update project parser (`src/backend/shared/utils/parse-project-files.ts`)

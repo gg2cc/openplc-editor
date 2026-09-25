@@ -5,6 +5,8 @@ import type {
   EthercatConfig,
   ModbusBufferMapping,
   ModbusIOGroup,
+  ModbusParity,
+  ModbusTransport,
   OpcUaNodeConfig,
   OpcUaSecurityProfile,
   OpcUaTrustedCertificate,
@@ -33,9 +35,21 @@ import type {
 // DTOs
 // ---------------------------------------------------------------------------
 
+/**
+ * Which set of variables an action works on.
+ *
+ * A Global Variable List's members are variables in the same sense a POU's locals and the
+ * resource globals are: same fields, same validation, same table in the UI. They are a third
+ * scope on the existing actions rather than a parallel set of list-specific ones, so the
+ * declaration editor and the table view cannot drift apart.
+ */
+export type VariableScope = 'global' | 'local' | 'global-variable-list'
+
 export type VariableDTO = {
-  scope: 'global' | 'local'
+  scope: VariableScope
   associatedPou?: string
+  /** Required for `global-variable-list` scope: which list's members to work on. */
+  associatedList?: string
   data: PLCVariable
 }
 
@@ -113,6 +127,26 @@ export type ProjectActions = {
   deletePou: (name: string) => void
   updatePouDocumentation: (name: string, documentation: string) => void
   updatePouReturnType: (name: string, returnType: string) => void
+  /**
+   * Store a POU's declaration text.
+   *
+   * `unparsed` records whether that text is known NOT to parse — the loader's
+   * verdict, which decides whether the POU opens in the code view so the user
+   * can repair it. Every other caller writes a text that came out of a
+   * successful parse or patch, so the default clears the mark rather than
+   * leaving a stale one behind.
+   */
+  setPouVariablesText: (name: string, text: string, unparsed?: boolean) => void
+  /**
+   * Patch a POU's declaration text to match its variables, and carry the result
+   * into an open code buffer.
+   *
+   * The same step every variable mutation in this slice runs, exposed for the
+   * cascades that live outside it — a data type rename reaches POU variables
+   * through `propagateDatatypeRename`, and the text has to follow or the old
+   * type name comes back on the next toggle to code view.
+   */
+  regeneratePouVariablesText: (name: string) => void
   clearPouVariablesText: (name: string) => void
   updatePouName: (oldName: string, newName: string) => void
   applyPouSnapshot: (name: string, variables: PLCVariable[], body: PLCBody) => void
@@ -122,21 +156,24 @@ export type ProjectActions = {
   setPouVariables: (args: { pouName: string; variables: PLCVariable[] }) => ProjectResponse
   setGlobalVariables: (args: { variables: PLCVariable[] }) => ProjectResponse
   updateVariable: (args: {
-    scope: 'global' | 'local'
+    scope: VariableScope
     associatedPou?: string
+    associatedList?: string
     rowId?: number
     variableId?: string
     data: Partial<PLCVariable>
   }) => ProjectResponse
   getVariable: (args: {
-    scope: 'global' | 'local'
+    scope: VariableScope
     associatedPou?: string
+    associatedList?: string
     rowId?: number
     variableId?: string
   }) => PLCVariable | undefined
   deleteVariable: (args: {
-    scope: 'global' | 'local'
+    scope: VariableScope
     associatedPou?: string
+    associatedList?: string
     rowId?: number
     variableId?: string
     variableName?: string
@@ -150,8 +187,9 @@ export type ProjectActions = {
     force?: boolean
   }) => ProjectResponse
   rearrangeVariables: (args: {
-    scope: 'global' | 'local'
+    scope: VariableScope
     associatedPou?: string
+    associatedList?: string
     rowId?: number
     variableId?: string
     newIndex: number
@@ -166,6 +204,8 @@ export type ProjectActions = {
    * onto every producer, and reconciles bound variables. Invoked after every
    * producer mutation and on target switch.
    */
+  /** Repair aliases saved before they had to be IEC identifiers; returns what it changed. */
+  normalizeProjectAliases: () => { repairs: Array<{ from: string; to: string; reason: string }> }
   recalculateIecAddresses: () => ProjectResponse
 
   /**
@@ -215,6 +255,27 @@ export type ProjectActions = {
    */
   renameAlias: (oldAlias: string, newAlias: string) => { renamed: number }
 
+  // Global variable lists — the object CODESYS calls a GVL.
+  // Every lookup here folds case: the name is an IEC identifier once compiled.
+  /** Create an empty list. Fails when one already carries that name. */
+  createGlobalVariableList: (name: string) => ProjectResponse
+  /** Remove the list. It lives in `project.json`, so there is no file to queue. */
+  deleteGlobalVariableList: (name: string) => void
+  /** Replace a list's variables wholesale — how the code view commits. */
+  updateGlobalVariableList: (name: string, variables: PLCVariable[]) => void
+  /** Set or clear the `VAR_GLOBAL` qualifier carried for the round trip, never compiled. */
+  updateGlobalVariableListQualifier: (name: string, qualifier: string | undefined) => void
+  /** Rename the list itself; references are `propagateGlobalVariableListRename`'s job. */
+  updateGlobalVariableListName: (oldName: string, newName: string) => void
+  /** Clone the whole record under a new name — no field is copied by hand. */
+  duplicateGlobalVariableList: (sourceName: string, newName: string) => ProjectResponse
+  /** Rewrite every `<oldName>.member` in every POU body, textual or graphical. */
+  propagateGlobalVariableListRename: (oldName: string, newName: string) => void
+  /** Fold the code view's pending buffer into the list. Fails when it does not parse. */
+  reconcileGlobalVariableListText: (name: string) => ProjectResponse
+  /** Rewrite the code view's buffer from the list. No-op when that view isn't open. */
+  regenerateGlobalVariableListText: (name: string) => void
+
   // Data types
   createDatatype: (dto: DataTypeDTO & { rowToInsert?: number }) => ProjectResponse
   deleteDatatype: (name: string) => void
@@ -238,6 +299,7 @@ export type ProjectActions = {
   /** Stash raw `.dt` files that failed to parse on load so saves echo
    *  them back verbatim (no silent data loss). */
   setUnparsedDataTypeFiles: (files: RawProjectFile[]) => void
+  setDataTypesNeedMigration: (needsMigration: boolean) => void
   /** Drop a preserved raw file once its text parses and becomes a real type. */
   removeUnparsedDataTypeFile: (relativePath: string) => void
 
@@ -263,8 +325,15 @@ export type ProjectActions = {
     name: string,
     config: {
       enabled?: boolean
+      transports?: ModbusTransport[]
       networkInterface?: string
       port?: number
+      slaveId?: number
+      serialPort?: string
+      baudRate?: number
+      parity?: ModbusParity
+      stopBits?: number
+      dataBits?: number
       bufferMapping?: Partial<ModbusBufferMapping>
     },
   ) => ProjectResponse
@@ -351,6 +420,11 @@ export type ProjectSlice = {
    *  back verbatim by the save flow until they parse — an unreadable
    *  file must never be silently dropped from disk. */
   unparsedDataTypeFiles: RawProjectFile[]
+  /** True while the project still carries its data types inline in
+   *  `project.json` with no `datatypes/*.dt` on disk. A single-file save of one
+   *  data type migrates the whole set while this is set, so the project is
+   *  never left half in one format and half in the other. */
+  dataTypesNeedMigration: boolean
   /**
    * Session-scoped IEC alias memory: `memoryKey -> alias`, where `memoryKey`
    * is a channel's stable semantic identity (`vpp:moduleId:slot:channel`,

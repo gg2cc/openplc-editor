@@ -1,13 +1,9 @@
-/**
- * Aggregate type that groups all port interfaces + platform capabilities.
- * This is the shape of the value provided by PlatformContext.
- */
-
 import type { AcceleratorPort } from '../ports/accelerator-port'
 import type { AIPort } from '../ports/ai-port'
 import type { CompilerPort } from '../ports/compiler-port'
 import type { DebuggerPort } from '../ports/debugger-port'
 import type { DevicePort } from '../ports/device-port'
+import type { EdgeAccountPort } from '../ports/edge-account-port'
 import type { EsiPort } from '../ports/esi-port'
 import type { LibraryPort } from '../ports/library-port'
 import type { NavigationPort } from '../ports/navigation-port'
@@ -42,12 +38,8 @@ export interface PlatformPorts {
   packages?: PackagePort
   esi?: EsiPort
   ai?: AIPort
-  /**
-   * Optional — present only on platforms that intend to host the
-   * STruC++ language server.  When `capabilities.hasStLSP` is true
-   * this port MUST be set; the editor adapter wires it, the web
-   * adapter wires a fetch-based variant, and headless test
-   * harnesses can leave it `undefined`.
-   */
+  // Gate on `capabilities.hasEdgeAccount`, not on presence: autonomy-node has no Edge account API.
+  edgeAccount?: EdgeAccountPort
+  // Required when `capabilities.hasStLSP` is true.
   stlibSource?: StlibSourcePort
 }

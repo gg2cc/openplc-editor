@@ -20,25 +20,16 @@
  */
 
 import type { PLCVariable } from '../../middleware/shared/ports/types'
+import { openPLCStoreBase } from '../store'
 import type { BoundBlockPin, UserDataTypeContext } from '../utils/PLC/validate-variable-type'
 import {
   getVariableRestrictionType,
   resolveNewVariableType,
   validateVariableType,
 } from '../utils/PLC/validate-variable-type'
-import { getScopedQueryApi } from './st-lsp'
-
-/**
- * LSP `CompletionItemKind`s that denote a value symbol bindable to a box.
- * strucpp emits `Variable` (6) for in-scope variables and FUNCTION_BLOCK
- * instance members (`TON0.Q`), but `Field` (5) for STRUCT members
- * (`my_struct.field`). Both must be accepted, or struct-member access never
- * autocompletes or validates.
- */
-const LSP_KIND_VARIABLE = 6
-const LSP_KIND_FIELD = 5
-const isValueCompletionKind = (kind: number | undefined): boolean =>
-  kind === LSP_KIND_VARIABLE || kind === LSP_KIND_FIELD
+import { collectDeclaredRoots, rootIdentifierOf } from './project-scope-roots'
+// The leaf, not the `st-lsp` barrel: the barrel pulls ESM-only LSP packages that Jest cannot transform.
+import { getScopedQueryApi, isValueCompletionKind, splitExpression } from './st-lsp/scoped-query'
 
 /** Max instance/struct variables to drill into when a type-filtered search has no direct hits. */
 const SCOPE_EXPAND_LIMIT = 8
@@ -69,13 +60,6 @@ export interface ScopeCompletion {
  */
 export type ScopeTypeResult = { status: 'unavailable' } | { status: 'unknown' } | { status: 'resolved'; type: string }
 
-/** Split `value` into the completion anchor (up to and including the last `.`) and the trailing segment. */
-function splitExpression(value: string): { anchor: string; segment: string } {
-  const lastDot = value.lastIndexOf('.')
-  if (lastDot < 0) return { anchor: '', segment: value }
-  return { anchor: value.slice(0, lastDot + 1), segment: value.slice(lastDot + 1) }
-}
-
 /**
  * Autocomplete candidates for `value` typed into a box in `pouName`'s
  * scope. `value` is the full current box text (e.g. `TON0.Q`, `mo`).
@@ -91,9 +75,19 @@ export async function getScopeCompletions(
   if (!api) return []
 
   const { anchor, segment } = splitExpression(value)
+  // Library symbols share the scope; only what the project declared may bind.
+  const roots = collectDeclaredRoots(openPLCStoreBase.getState().project.data, pouName)
+  if (anchor && !roots.has(rootIdentifierOf(anchor))) return []
+
   const items = await api.completeInScope(pouName, anchor)
   const needle = segment.toLowerCase()
-  const matching = items.filter((item) => isValueCompletionKind(item.kind) && item.label.toLowerCase().includes(needle))
+  const matching = items.filter(
+    (item) =>
+      isValueCompletionKind(item.kind) &&
+      item.label.toLowerCase().includes(needle) &&
+      // Under an anchor the root was checked above; bare labels are the root.
+      (anchor !== '' || roots.has(rootIdentifierOf(item.label))),
+  )
 
   const direct = matching
     .filter((item) => {
@@ -113,7 +107,8 @@ export async function getScopeCompletions(
   // BOOL). Drill one level into the matching instance/struct variables and
   // surface their compatible members. Gated on "no direct hits" + capped, so
   // the extra LSP round-trips stay rare and bounded.
-  if (!expectedType || direct.length > 0) return direct
+  // Only an unanchored empty box names no instance to drill into; `GVL.` names one.
+  if (!expectedType || direct.length > 0 || (!anchor && !segment.trim())) return direct
 
   const expandable = matching.filter((item) => item.type && isDerivedType(item.type)).slice(0, SCOPE_EXPAND_LIMIT)
   const expanded = await Promise.all(
@@ -193,7 +188,7 @@ export function newVariableTypeForExpected(
 } {
   const resolved = resolveNewVariableType(expectedType, boundSiblings, context)
   return {
-    definition: (resolved.definition as PLCVariable['type']['definition']) ?? 'base-type',
+    definition: resolved.definition ?? 'base-type',
     value: resolved.value,
   }
 }
@@ -210,7 +205,7 @@ export function scopeCompletionToVariable(candidate: ScopeCompletion): PLCVariab
     id: '',
     name: candidate.insertText,
     type: {
-      definition: (restriction?.definition as PLCVariable['type']['definition']) ?? 'base-type',
+      definition: restriction?.definition ?? 'base-type',
       value,
     },
     class: 'local',

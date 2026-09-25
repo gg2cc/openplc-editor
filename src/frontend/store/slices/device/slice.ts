@@ -2,8 +2,10 @@ import { produce } from 'immer'
 import { StateCreator } from 'zustand'
 
 import type { DeviceConfiguration, DevicePin } from '../../../../middleware/shared/ports/types'
+import { DEFAULT_RETAIN_FLUSH_SECONDS } from '../../../../middleware/shared/ports/types'
 import { defaultDeviceConfiguration } from './data/types'
-import type { DeviceSlice, DeviceSliceRoot, PinUpdateResponse } from './types'
+import type { DeviceLicenseInfo, DeviceSlice, DeviceSliceRoot, PinUpdateResponse } from './types'
+import { PURCHASE_WATCH_WINDOW_MS } from './types'
 import {
   checkIfPinAliasIsValid,
   checkIfPinIsValid,
@@ -31,6 +33,58 @@ function getActivePinsDraft(draft: DeviceSlice): DevicePin[] {
   return draft.deviceDefinitions.pinMapping.pinsByBoard[board]
 }
 
+/**
+ * Reset licensing to its initial state on an Immer draft — THE one way to drop
+ * a licence. Three paths must do it (`clearDeviceLicense`, an actual board
+ * change in `setDeviceBoard`, `clearDeviceDefinitions`), and when each inlined
+ * its own reset they drifted: two of them forgot the purchase watch, whose poll
+ * then outlived the board it was started for and kept running `refresh()` —
+ * including its licence WRITE — against whatever board came next. Route any
+ * future reset path through here so it cannot drift the same way.
+ */
+function resetDeviceLicense(deviceLicense: DeviceLicenseInfo): void {
+  deviceLicense.phase = 'idle'
+  deviceLicense.report = null
+  // Ends any purchase watch too: the poll effect keys off this deadline, and a
+  // watch without its board would poll (and could write a licence to) hardware
+  // the user never asked about.
+  deviceLicense.awaitingPurchaseUntil = null
+}
+
+/**
+ * The only pin state the central IEC recalculation depends on: which addresses
+ * the pin block occupies, in order.
+ *
+ * Pins are the one producer the registry keeps PINNED — they're fixed hardware,
+ * so VPP / Modbus / EtherCAT allocate around them. Every pin add / remove /
+ * retype therefore moves the constraints the other producers were packed
+ * against, and nothing recompacted them: `removePin` decrements the trailing
+ * pins of its own type, so the freed slot slides to the END of the pin block
+ * and whatever allocated after it never moves up; `createNewPin` mints
+ * `highest + 1`, which on a board with pin mapping AND VPP/Modbus can land on
+ * top of a channel already sitting there — a two-producer collision with no
+ * conflict report, because nothing recalculated.
+ */
+function pinAddressSignature(state: DeviceSliceRoot): string {
+  const board = state.deviceDefinitions.configuration.deviceBoard
+  return (state.deviceDefinitions.pinMapping.pinsByBoard[board] ?? []).map((pin) => pin.address).join(',')
+}
+
+/**
+ * Recompact the other producers around the new pin layout, but only when the
+ * pin addresses actually moved since `before`. Mirrors `setDeviceBoard`, the
+ * other place where a constraint change drives the central recalculation.
+ *
+ * Comparing rather than recalculating unconditionally keeps alias-only and
+ * pin-number-only edits free, and covers `updatePin`'s pinType branch (which
+ * rewrites addresses) without special-casing it.
+ */
+function recalcIfPinAddressesMoved(getState: () => DeviceSliceRoot, before: string): void {
+  if (pinAddressSignature(getState()) !== before) {
+    getState().projectActions.recalculateIecAddresses()
+  }
+}
+
 const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (setState, getState) => ({
   deviceAvailableOptions: {
     availableBoards: new Map(),
@@ -52,6 +106,7 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
     plcStatus: null,
     switchPosition: null,
     ipAddress: null,
+    runtimeUpdateInProgress: false,
     runtimeVersion: null,
     selectedDevice: null,
     storedCredentials: null,
@@ -70,6 +125,7 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
   deviceLicense: {
     phase: 'idle',
     report: null,
+    awaitingPurchaseUntil: null,
   },
 
   deviceActions: {
@@ -148,8 +204,7 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
           // select a different board entirely, and a "Licensed" badge carried over
           // from the previous one would be an assertion about hardware that is not
           // even connected.
-          deviceLicense.phase = 'idle'
-          deviceLicense.report = null
+          resetDeviceLicense(deviceLicense)
         }),
       )
     },
@@ -169,6 +224,7 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
     },
 
     createNewPin: (): void => {
+      const pinsBefore = pinAddressSignature(getState())
       setState(
         produce((draft: DeviceSlice) => {
           draft.deviceUpdated.updated = true
@@ -217,8 +273,10 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
           pinMapping.currentSelectedPinTableRow = indexOfHighestPinAddress + 1
         }),
       )
+      recalcIfPinAddressesMoved(getState, pinsBefore)
     },
     removePin: (): void => {
+      const pinsBefore = pinAddressSignature(getState())
       setState(
         produce((draft: DeviceSlice) => {
           draft.deviceUpdated.updated = true
@@ -251,6 +309,7 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
           pinMapping.currentSelectedPinTableRow = selectedRow
         }),
       )
+      recalcIfPinAddressesMoved(getState, pinsBefore)
     },
     updatePin: (updatedData): PinUpdateResponse => {
       const returnMessage: PinUpdateResponse = {
@@ -259,6 +318,7 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
         message: '',
         data: { pin: '', pinType: '', address: '', alias: '' },
       }
+      const pinsBefore = pinAddressSignature(getState())
       setState(
         produce((draft: DeviceSlice) => {
           draft.deviceUpdated.updated = true
@@ -376,6 +436,7 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
           }
         }),
       )
+      recalcIfPinAddressesMoved(getState, pinsBefore)
       return returnMessage
     },
     setDeviceBoard: (deviceBoard): void => {
@@ -407,14 +468,25 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
             const cfg = deviceDefinitions.configuration
             syncActiveBoardVendorBucket(cfg)
             cfg.vendorScreenData = { ...(cfg.vendorScreenDataByBoard?.[deviceBoard] ?? {}) }
+            // Persistent storage is board-specific for a sharper reason than the
+            // rest: the value is a PATH ON A PARTICULAR BOX. Carried across a
+            // switch it does not merely become meaningless, it ships the new
+            // device a location belonging to the old one — and the compile path
+            // reads this flat view, so that path is what lands in retain.conf.
+            //
+            // Deliberately `undefined`, not `{}`, when the incoming board has no
+            // bucket: absent settings are what make `generateRetainConf` emit no
+            // file, which is the right default for a board nobody has configured
+            // and is not the same as inheriting a path.
+            syncActiveBoardPersistentStorage(cfg)
+            cfg.persistentStorage = cfg.persistentStorageByBoard?.[deviceBoard]
             // A licence report is board-specific for the same reason all of the
             // above is: it was verified against the PREVIOUS board's `deviceId`
             // and its VPP's `productId`. Carried across a switch, the badge
             // asserts possession for hardware that is no longer selected, and
             // the buy link gets built from the NEW package id paired with the
             // OLD device id — binding a purchase to the wrong board.
-            deviceLicense.phase = 'idle'
-            deviceLicense.report = null
+            resetDeviceLicense(deviceLicense)
           }
           deviceDefinitions.configuration.deviceBoard = deviceBoard
         }),
@@ -528,6 +600,13 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
         }),
       )
     },
+    setRuntimeUpdateInProgress: (inProgress): void => {
+      setState(
+        produce(({ runtimeConnection }: DeviceSlice) => {
+          runtimeConnection.runtimeUpdateInProgress = inProgress
+        }),
+      )
+    },
     setEthercatStatus: (status): void => {
       setState(
         produce(({ runtimeConnection }: DeviceSlice) => {
@@ -602,11 +681,39 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
         }),
       )
     },
+    setAwaitingPurchase: (awaiting): void => {
+      setState(
+        produce(({ deviceLicense }: DeviceSlice) => {
+          // The window is an absolute wall-clock deadline stamped here, not a
+          // counter kept by the poll effect — so a remounted effect resumes
+          // the SAME window and a skipped overlap tick spends none of it.
+          deviceLicense.awaitingPurchaseUntil = awaiting ? Date.now() + PURCHASE_WATCH_WINDOW_MS : null
+        }),
+      )
+    },
     clearDeviceLicense: (): void => {
       setState(
         produce(({ deviceLicense }: DeviceSlice) => {
-          deviceLicense.phase = 'idle'
-          deviceLicense.report = null
+          resetDeviceLicense(deviceLicense)
+        }),
+      )
+    },
+    setPersistentStorage: (patch): void => {
+      setState(
+        produce(({ deviceDefinitions, deviceUpdated }: DeviceSlice) => {
+          deviceUpdated.updated = true
+          const cfg = deviceDefinitions.configuration
+          // Absent means "this project does not use persistent storage", so the
+          // first edit materialises the object from the same defaults the schema
+          // declares rather than half of one.
+          cfg.persistentStorage = {
+            enabled: false,
+            path: '',
+            flushSeconds: DEFAULT_RETAIN_FLUSH_SECONDS,
+            ...cfg.persistentStorage,
+            ...patch,
+          }
+          syncActiveBoardPersistentStorage(cfg)
         }),
       )
     },
@@ -652,6 +759,21 @@ const createDeviceSlice: StateCreator<DeviceSliceRoot, [], [], DeviceSlice> = (s
     },
   },
 })
+
+/**
+ * Keep the active board's bucket in `persistentStorageByBoard` in lock-step with
+ * the flat `persistentStorage` view, exactly as the vendor-screen sibling below
+ * does. A storage path names a location on one particular box, so retargeting a
+ * project must not carry it onto another.
+ */
+function syncActiveBoardPersistentStorage(configuration: DeviceConfiguration): void {
+  if (!configuration.persistentStorageByBoard) {
+    configuration.persistentStorageByBoard = {}
+  }
+  if (configuration.persistentStorage) {
+    configuration.persistentStorageByBoard[configuration.deviceBoard] = { ...configuration.persistentStorage }
+  }
+}
 
 /**
  * Keep the active board's bucket in `vendorScreenDataByBoard` in lock-step
