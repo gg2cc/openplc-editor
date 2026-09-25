@@ -10,7 +10,6 @@ import { DebuggerIcon } from '../../../assets/icons/interface/Debugger'
 import { useOpenPLCStore } from '../../../store'
 import { TypeChangeValidationResult, validateTypeChange } from '../../../store/slices/project/validation/type-change'
 import { cn } from '../../../utils/cn'
-import { getSystemLibraryDataTypeNames, mergeTypeNames } from '../../../utils/library-type-options'
 import { hasStringName, safeUpper } from '../../../utils/safe-upper'
 import { propagateVariableTypeChange } from '../../../utils/variable-references'
 import { InputWithRef } from '../../_atoms/input'
@@ -63,13 +62,7 @@ const SelectableTypeCell = ({
       definition: 'base-type',
       values: baseTypeEnum.options,
     },
-    {
-      definition: 'user-data-type',
-      values: mergeTypeNames(
-        dataTypes.filter(hasStringName).map((dataType) => dataType.name),
-        getSystemLibraryDataTypeNames(sliceLibraries.system),
-      ),
-    },
+    { definition: 'user-data-type', values: dataTypes.filter(hasStringName).map((dataType) => dataType.name) },
   ]
 
   const LibraryTypes = [

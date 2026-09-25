@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react'
 
 import { useOpenPLCStore } from '../../../../../../store'
 import { arrayValidation } from '../../../../../../store/slices/project/validation/variables'
-import { getSystemLibraryDataTypeNames, mergeTypeNames } from '../../../../../../utils/library-type-options'
 import { hasStringName } from '../../../../../../utils/safe-upper'
 import { DimensionsModal } from '../../../../../_atoms/dimensions-modal'
 import { toast } from '../../../../../_features/[app]/toast/use-toast'
@@ -44,7 +43,6 @@ export const ArrayModal = ({
     .filter(hasStringName)
     .map((type) => type.name)
     .filter((typeName) => typeName !== name && typeName.toUpperCase() !== 'ARRAY')
-  const systemDataTypes = getSystemLibraryDataTypeNames(sliceLibraries.system, name)
 
   const systemFunctionBlocks = sliceLibraries.system.flatMap((lib) =>
     (lib.pous ?? [])
@@ -66,7 +64,7 @@ export const ArrayModal = ({
 
   const VariableTypes = [
     { definition: 'base-type', values: baseTypes },
-    { definition: 'user-data-type', values: mergeTypeNames(userDataTypes, systemDataTypes) },
+  { definition: 'user-data-type', values: userDataTypes },
   ]
 
   const LibraryTypes = [

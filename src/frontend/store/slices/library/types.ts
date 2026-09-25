@@ -4,9 +4,6 @@ export type {
   LibraryState,
   SystemLibrary,
   SystemLibraryPou,
-  SystemLibraryType,
-  SystemLibraryTypeField,
-  SystemLibraryTypeKind,
   SystemLibraryVariable,
   UserLibrary,
 } from '../../../../middleware/shared/ports/library-types'

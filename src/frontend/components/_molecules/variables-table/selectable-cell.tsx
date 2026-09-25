@@ -11,7 +11,6 @@ import { useOpenPLCStore } from '../../../store'
 import { TypeChangeValidationResult, validateTypeChange } from '../../../store/slices/project/validation/type-change'
 import { cn } from '../../../utils/cn'
 import { syncNodesWithVariables, syncNodesWithVariablesFBD } from '../../../utils/graphical/sync-nodes-with-variables'
-import { getSystemLibraryDataTypeNames, mergeTypeNames } from '../../../utils/library-type-options'
 import { hasStringName, safeUpper } from '../../../utils/safe-upper'
 import { InputWithRef } from '../../_atoms/input'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '../../_atoms/select'
@@ -68,10 +67,7 @@ const SelectableTypeCell = ({
     },
     {
       definition: 'user-data-type',
-      values: mergeTypeNames(
-        dataTypes.filter(hasStringName).map((dataType) => dataType.name),
-        getSystemLibraryDataTypeNames(sliceLibraries.system),
-      ),
+      values: dataTypes.filter(hasStringName).map((dataType) => dataType.name),
     },
   ]
 

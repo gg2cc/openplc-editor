@@ -162,11 +162,7 @@ export interface UserDataTypeContext {
 function isKnownUserDataType(typeName: string, context: UserDataTypeContext): boolean {
   const target = typeName.toUpperCase()
   if (context.dataTypes?.some((dataType) => dataType.name.toUpperCase() === target)) return true
-  return (
-    context.systemLibraries?.some((library) =>
-      (library.types ?? []).some((type) => type.name.toUpperCase() === target),
-    ) ?? false
-  )
+  return false
 }
 
 /**
