@@ -143,7 +143,6 @@ function projectVariable(v: SchemaVariable): TranspileVariable {
     name: v.name,
     type: projectVariableType(v.type),
     ...(v.class !== undefined ? { class: normalizeVarClass(v.class) } : {}),
-    ...(v.retain ? { retain: true } : {}),
     ...(v.location !== undefined && v.location !== '' ? { location: v.location } : {}),
     ...(v.initialValue !== undefined && v.initialValue !== null && v.initialValue !== ''
       ? { initialValue: v.initialValue }

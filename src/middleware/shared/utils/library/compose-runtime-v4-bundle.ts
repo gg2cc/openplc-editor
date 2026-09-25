@@ -47,9 +47,6 @@
 export interface ComposeRuntimeV4BundleInput {
   /** Concatenated ST program emitted by the ST transpiler. */
   programSt: string
-  /** Runtime retain configuration.  It is emitted at the bundle root because
-   * the runtime extracts that path to `core/generated/retain.conf`. */
-  retainConf?: string | null
   /** MD5 of `programSt` — written to `defines.h` so the v4 runtime
    *  shim (`runtime_v4_entry.cpp`) can report it via FC 0x45. */
   md5: string
@@ -103,7 +100,6 @@ export function composeRuntimeV4Bundle(input: ComposeRuntimeV4BundleInput): Reco
 
   // 1. Concatenated ST program (ST transpiler output)
   files['program.st'] = input.programSt
-  if (input.retainConf) files['retain.conf'] = input.retainConf
 
   // 2. Strucpp emitted artefacts at the zip root
   for (const [name, content] of Object.entries(input.strucppFiles)) {

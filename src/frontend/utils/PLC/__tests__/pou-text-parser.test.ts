@@ -59,25 +59,6 @@ END_PROGRAM`
     expect(result.documentation).toBe('')
   })
 
-  it('preserves the RETAIN modifier on local variables', () => {
-    const content = `PROGRAM Main
-VAR RETAIN
-  retained : DINT;
-END_VAR
-VAR
-  ordinary : DINT;
-END_VAR
-
-retained := retained + 1;
-
-END_PROGRAM`
-
-    const result = parseTextualPouFromString(content, 'st', 'program')
-
-    expect(result.interface?.variables.find((variable) => variable.name === 'retained')?.retain).toBe(true)
-    expect(result.interface?.variables.find((variable) => variable.name === 'ordinary')?.retain).toBeUndefined()
-  })
-
   it('parses an IL program', () => {
     const content = `PROGRAM IlProg
 VAR

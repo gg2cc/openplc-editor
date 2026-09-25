@@ -49,7 +49,6 @@ import type { PLCProjectData } from '../types/PLC/open-plc'
 import { buildCBlocksFromPous, composeFirmwareBundle } from './steps/compose-firmware-bundle'
 import { generateRuntimeConfs } from './steps/generate-confs'
 import { generateDefinesContent } from './steps/generate-defines'
-import { generateRetainConf } from './steps/generate-retain-conf'
 import { generateVppConfigContent } from './steps/generate-vpp-config'
 import { findEmptyFbdVariables } from './steps/validate-empty-variables'
 
@@ -545,7 +544,6 @@ async function runCompilePipelineInner(
     const cBlocks = buildCBlocksFromPous(originalCppPous as never)
     const bundle = composeRuntimeV4Bundle({
       programSt,
-      retainConf: generateRetainConf(programSt),
       md5,
       strucppFiles: strucppFilesMap,
       cBlocks: { header: cBlocks.header, code: cBlocks.code },

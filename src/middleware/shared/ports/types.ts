@@ -56,7 +56,6 @@ export interface PLCVariable {
   id?: string
   name: string
   class?: VariableClass
-  retain?: boolean
   type: PLCVariableType
   /**
    * The variable's binding — single-field model: an alias name OR a literal

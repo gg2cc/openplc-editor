@@ -111,7 +111,6 @@ type PLCDataType = z.infer<typeof PLCDataTypeSchema>
 const PLCVariableSchema = z.object({
   name: z.string(),
   class: z.enum(['input', 'output', 'inOut', 'external', 'local', 'temp', 'global']).optional(),
-  retain: z.boolean().optional(),
   type: z.discriminatedUnion('definition', [
     z.object({
       definition: z.literal('base-type'),

@@ -35,7 +35,6 @@ function formatReturnType(returnType: string | undefined): string {
 interface InterfaceEntry {
   keyword: string
   located: boolean
-  retain: boolean
   vars: TranspileVariable[]
 }
 
@@ -78,8 +77,7 @@ export function generateTextualPou(pou: TranspilePou, project: TranspileProject,
   let varNumber = 0
   for (const entry of iface) {
     const variableType = locationCategory(entry.keyword)
-    const keyword = entry.retain ? `${entry.keyword} RETAIN` : entry.keyword
-    program.push([`  ${keyword}`, []])
+    program.push([`  ${entry.keyword}`, []])
     program.push(['\n', []])
 
     for (const v of entry.vars) {
@@ -151,31 +149,26 @@ function computeInterface(variables: TranspileVariable[]): InterfaceEntry[] {
     temp: varTypeNames.tempVars,
   }
 
-  const grouped = new Map<
-    string,
-    { keyword: string; retain: boolean; located: TranspileVariable[]; unlocated: TranspileVariable[] }
-  >()
+  const grouped = new Map<string, { located: TranspileVariable[]; unlocated: TranspileVariable[] }>()
   // Maintain insertion order matching the IR's variable order.
   for (const v of variables) {
     const keyword = classToKeyword[v.class ?? 'local'] ?? varTypeNames.localVars
-    const retain = v.retain === true
-    const groupKey = `${keyword}:${retain ? 'retain' : 'ordinary'}`
-    let bucket = grouped.get(groupKey)
+    let bucket = grouped.get(keyword)
     if (!bucket) {
-      bucket = { keyword, retain, located: [], unlocated: [] }
-      grouped.set(groupKey, bucket)
+      bucket = { located: [], unlocated: [] }
+      grouped.set(keyword, bucket)
     }
     if (v.location) bucket.located.push(v)
     else bucket.unlocated.push(v)
   }
 
   const out: InterfaceEntry[] = []
-  for (const [, bucket] of grouped) {
+  for (const [keyword, bucket] of grouped) {
     if (bucket.unlocated.length > 0) {
-      out.push({ keyword: bucket.keyword, located: false, retain: bucket.retain, vars: bucket.unlocated })
+      out.push({ keyword, located: false, vars: bucket.unlocated })
     }
     if (bucket.located.length > 0) {
-      out.push({ keyword: bucket.keyword, located: true, retain: bucket.retain, vars: bucket.located })
+      out.push({ keyword, located: true, vars: bucket.located })
     }
   }
   return out

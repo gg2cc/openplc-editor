@@ -85,7 +85,6 @@ export interface TranspileVariable {
   name: string
   type: TranspileVariableType
   class?: TranspileVariableClass
-  retain?: boolean
   /** IEC located address (`%QX0.0`, `%IW3`, …). */
   location?: string
   /** Raw initial-value text — caller-supplied, no quote-wrapping. */

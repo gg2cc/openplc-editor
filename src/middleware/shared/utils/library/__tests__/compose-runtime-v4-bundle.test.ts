@@ -38,12 +38,6 @@ describe('composeRuntimeV4Bundle', () => {
     expect(files['program.st']).toBe('PROGRAM Main\nEND_PROGRAM\n')
   })
 
-  it('writes retain.conf at the bundle root when provided', () => {
-    const retainConf = 'enabled=1\npath=/var/lib/openplc-runtime/retain.bin\nflush_seconds=5\n'
-    const files = composeRuntimeV4Bundle(baseInput({ retainConf }))
-    expect(files['retain.conf']).toBe(retainConf)
-  })
-
   it('passes strucpp emitted files through at root keys', () => {
     const files = composeRuntimeV4Bundle(baseInput())
     expect(files['generated.cpp']).toBe('// generated\n')

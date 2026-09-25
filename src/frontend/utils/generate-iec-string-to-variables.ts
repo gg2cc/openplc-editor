@@ -12,8 +12,6 @@ const varBlockToClass: Record<string, PLCVariable['class']> = {
   VAR_GLOBAL: 'global',
 }
 
-const retainVarBlocks = new Set(['VAR', 'VAR_GLOBAL'])
-
 /**
  * Classes whose declarations cannot carry a physical location ("AT").
  * IEC 61131-3 only allows located declarations in VAR and VAR_GLOBAL
@@ -108,26 +106,20 @@ export const parseIecStringToVariables = (
   const variables: PLCVariable[] = []
   const lines = iecString.split(/\r?\n/)
   let currentClass: PLCVariable['class'] | null = null
-  let currentRetain = false
 
   lines.forEach((rawLine, idx) => {
     const lineNumber = idx + 1
     const line = rawLine.trim()
     if (line === '') return
 
-    const blockStart = line.match(
-      /^(VAR_INPUT|VAR_OUTPUT|VAR_IN_OUT|VAR_EXTERNAL|VAR_TEMP|VAR_GLOBAL|VAR)(?:\s+RETAIN)?\b/i,
-    )
+    const blockStart = line.match(/^(VAR_INPUT|VAR_OUTPUT|VAR_IN_OUT|VAR_EXTERNAL|VAR_TEMP|VAR_GLOBAL|VAR)\b/i)
     if (blockStart) {
-      const blockKeyword = blockStart[1].toUpperCase()
-      currentClass = varBlockToClass[blockKeyword]
-      currentRetain = retainVarBlocks.has(blockKeyword) && /\bRETAIN\b/i.test(line)
+      currentClass = varBlockToClass[blockStart[1].toUpperCase()]
       return
     }
 
     if (/^END_VAR\b/i.test(line)) {
       currentClass = null
-      currentRetain = false
       return
     }
 
@@ -164,7 +156,6 @@ export const parseIecStringToVariables = (
       variables.push({
         name: name.trim(),
         class: currentClass,
-        ...(currentRetain ? { retain: true } : {}),
         type: arrayType,
         location: location ? location.trim() : '',
         initialValue: initialValue ? initialValue.trim() : null,
@@ -202,7 +193,6 @@ export const parseIecStringToVariables = (
     variables.push({
       name: name.trim(),
       class: currentClass,
-      ...(currentRetain ? { retain: true } : {}),
       type: typeDefinition,
       location: location ? location.trim() : '',
       initialValue: initialValue ? initialValue.trim() : null,
