@@ -299,7 +299,7 @@ function traverseNestedNode<T>(
 
     // Structure type — STruC++ emits struct fields as `PARENT.FIELD`
     // (same convention as FB fields), no `.value.` shim.
-    const structVariables = findStructureVariables(typeName, dataTypes, systemLibraries)
+    const structVariables = findStructureVariables(typeName, dataTypes)
 
     if (!structVariables) {
       const debugVar = findDebugVariable(debugVariables, fullPath)
