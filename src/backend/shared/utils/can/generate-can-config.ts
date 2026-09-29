@@ -33,7 +33,7 @@ export function generateCanConfig(remoteDevices: PLCRemoteDevice[] | undefined):
           hardwareConfig.bitrate !== 500000 ||
           hardwareConfig.sjw !== 1 ||
           hardwareConfig.samplePoint !== 0.875 ||
-          hardwareConfig.restartMs !== 100 ||
+          hardwareConfig.restartMs !== 1000 ||
           hardwareConfig.tripleSampling !== false)
 
     if (!hasRealConfig) return []
@@ -49,7 +49,7 @@ export function generateCanConfig(remoteDevices: PLCRemoteDevice[] | undefined):
           bitrate: hardwareConfig?.bitrate ?? 500000,
           sjw: hardwareConfig?.sjw ?? 1,
           sample_point: hardwareConfig?.samplePoint ?? 0.875,
-          restart_ms: hardwareConfig?.restartMs ?? 100,
+          restart_ms: hardwareConfig?.restartMs ?? 1000,
           triple_sampling: hardwareConfig?.tripleSampling ?? false,
         },
         rx_frames: rxFrames.map((frame) => ({

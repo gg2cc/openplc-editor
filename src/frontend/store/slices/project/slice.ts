@@ -2257,7 +2257,7 @@ const createProjectSlice: StateCreator<ProjectSliceRoot, [], [], ProjectSlice> =
                 bitrate: 500000,
                 sjw: 1,
                 samplePoint: 0.875,
-                restartMs: 100,
+                restartMs: 1000,
                 tripleSampling: false,
               },
               portStatusPlcAddress: '%IB0',

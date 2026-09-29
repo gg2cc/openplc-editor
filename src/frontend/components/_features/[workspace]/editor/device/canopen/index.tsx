@@ -76,7 +76,7 @@ const defaultCanopenBus = (buses: CanopenBusConfig[] = []): CanopenBusConfig => 
     bitrate: 500000,
     sjw: 1,
     samplePoint: 0.875,
-    restartMs: 100,
+    restartMs: 1000,
     tripleSampling: false,
     heartbeatMs: 1000,
     syncPeriodMs: 0,
@@ -1146,7 +1146,7 @@ const CanopenDeviceEditor = () => {
                       <InputWithRef
                         type='number'
                         min={0}
-                        value={bus.restartMs ?? 100}
+                        value={bus.restartMs ?? 1000}
                         onChange={(e) => handleCanopenBusChange(busIndex, { restartMs: Number(e.target.value) || 0 })}
                         className={inputStyles}
                       />

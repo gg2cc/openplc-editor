@@ -44,7 +44,7 @@ export function generateCanopenConfig(remoteDevices: PLCRemoteDevice[] | undefin
         bitrate: bus.bitrate,
         sjw: bus.sjw ?? 1,
         sample_point: bus.samplePoint ?? 0.875,
-        restart_ms: bus.restartMs ?? 100,
+        restart_ms: bus.restartMs ?? 1000,
         triple_sampling: bus.tripleSampling ?? false,
         heartbeat_ms: bus.heartbeatMs ?? 1000,
         sync_period_ms: bus.syncPeriodMs ?? 0,

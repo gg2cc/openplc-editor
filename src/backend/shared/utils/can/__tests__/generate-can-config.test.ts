@@ -66,7 +66,7 @@ describe('generateCanConfig', () => {
             bitrate: 500000,
             sjw: 1,
             samplePoint: 0.875,
-            restartMs: 100,
+            restartMs: 1000,
             tripleSampling: false,
           },
           rxFrames: [],
@@ -115,7 +115,6 @@ describe('generateCanConfig', () => {
             bitrate: 500000,
             sjw: 1,
             samplePoint: 0.875,
-            restartMs: 100,
             tripleSampling: false,
           },
           rxFrames: [],
@@ -136,6 +135,7 @@ describe('generateCanConfig', () => {
     expect(output).toContain('"interfaces"')
     expect(output).toContain('"interface": "can0"')
     expect(output).toContain('"interface": "can1"')
+    expect(JSON.parse(output as string).interfaces[1].hardware_config.restart_ms).toBe(1000)
     expect(output).toContain('"port_status_plc_address": "%IB10"')
     expect(output).toContain('"data_status_plc_address": "%IB11"')
     expect(output).toContain('"data_status_timeout_ms": 5000')
@@ -440,7 +440,6 @@ describe('generateCanConfig', () => {
               bitrate: 500000,
               sjw: 1,
               samplePoint: 0.875,
-              restartMs: 100,
               tripleSampling: false,
               heartbeatMs: 1000,
               syncPeriodMs: 1000,
@@ -485,7 +484,7 @@ describe('generateCanConfig', () => {
     expect(json.buses[0].bitrate).toBe(500000)
     expect(json.buses[0].sjw).toBe(1)
     expect(json.buses[0].sample_point).toBe(0.875)
-    expect(json.buses[0].restart_ms).toBe(100)
+    expect(json.buses[0].restart_ms).toBe(1000)
     expect(json.buses[0].triple_sampling).toBe(false)
     expect(json.buses[0].heartbeat_ms).toBe(1000)
     expect(json.buses[0].sync_period_ms).toBe(1000)

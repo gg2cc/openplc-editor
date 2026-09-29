@@ -128,7 +128,7 @@ const DEFAULT_HARDWARE_CONFIG: CanHardwareConfig = {
   bitrate: 500000,
   sjw: 1,
   samplePoint: 0.875,
-  restartMs: 100,
+  restartMs: 1000,
   tripleSampling: false,
 }
 
@@ -820,7 +820,7 @@ const CanDeviceEditor = () => {
               <InputWithRef
                 type='number'
                 min={0}
-                value={hw.restartMs ?? 100}
+                value={hw.restartMs ?? 1000}
                 onChange={(e) => handleHwChange('restartMs', parseInt(e.target.value, 10) || 0)}
                 className={inputStyles}
               />
