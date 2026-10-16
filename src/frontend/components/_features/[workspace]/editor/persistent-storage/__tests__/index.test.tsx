@@ -60,6 +60,14 @@ describe('PersistentStorageEditor', () => {
     expect(input(screen.getByLabelText(/file location/i)).disabled).toBe(true)
   })
 
+  it('shows storage on for a project with saved storage settings', () => {
+    setSettings({ enabled: true, path: '/data/retain.bin', flushSeconds: 5 })
+    render(<PersistentStorageEditor />)
+
+    expect(input(screen.getByRole('checkbox')).checked).toBe(true)
+    expect(input(screen.getByLabelText(/file location/i)).disabled).toBe(false)
+  })
+
   it('writes the toggle into the project, materialising the record on first edit', () => {
     render(<PersistentStorageEditor />)
 

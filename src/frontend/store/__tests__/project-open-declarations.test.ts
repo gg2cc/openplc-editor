@@ -19,12 +19,19 @@ const PROJECT_JSON = JSON.stringify({
   data: { dataTypes: [], pous: [], configuration: { resource: { tasks: [], instances: [], globalVariables: [] } } },
 })
 
-const openWith = (declarations: string) => {
+const openWith = (
+  declarations: string,
+  deviceConfiguration: Record<string, unknown> = {
+    deviceBoard: 'uno',
+    communicationPort: '',
+    compileOnly: false,
+  },
+) => {
   openPLCStoreBase.getState().sharedWorkspaceActions.clearStatesOnCloseProject()
   const parsed = parseProjectFiles(
     '/p',
     PROJECT_JSON,
-    JSON.stringify({ deviceBoard: 'uno', communicationPort: '', compileOnly: false }),
+    JSON.stringify(deviceConfiguration),
     JSON.stringify([]),
     [{ relativePath: 'pous/programs/main.st', content: `PROGRAM main\n${declarations}\n\na := 1;\n\nEND_PROGRAM` }],
     [],
@@ -37,6 +44,23 @@ const openWith = (declarations: string) => {
 }
 
 describe('opening a project', () => {
+  it('restores persistent-storage settings from the saved device configuration', () => {
+    const settings = { enabled: true, path: '/data/retain.bin', flushSeconds: 12 }
+    const deviceBoard = 'OpenPLC Runtime v4'
+
+    openWith('', {
+      deviceBoard,
+      communicationPort: '',
+      compileOnly: false,
+      persistentStorage: settings,
+      persistentStorageByBoard: { [deviceBoard]: settings },
+    })
+
+    const configuration = openPLCStoreBase.getState().deviceDefinitions.configuration
+    expect(configuration.persistentStorage).toEqual(settings)
+    expect(configuration.persistentStorageByBoard?.[deviceBoard]).toEqual(settings)
+  })
+
   it("leaves comments, blank lines and the user's own spelling byte for byte", () => {
     const declarations = 'VAR\n  (* header *)\n\n  a : INT;  (* how many *)\n  b : bool; // flag\nEND_VAR'
     const pou = openWith(declarations)

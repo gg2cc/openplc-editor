@@ -609,6 +609,24 @@ describe('createDeviceSlice', () => {
       expect(cfg.runtimeIpAddress).toBe(defaultDeviceConfiguration.runtimeIpAddress)
     })
 
+    it('restores persistent-storage settings from the project configuration', () => {
+      const store = makeStore()
+      const settings = { enabled: true, path: '/data/retain.bin', flushSeconds: 12 }
+      const byBoard = { 'OpenPLC Runtime v4': settings }
+
+      store.getState().deviceActions.setDeviceDefinitions({
+        configuration: {
+          deviceBoard: 'OpenPLC Runtime v4',
+          persistentStorage: settings,
+          persistentStorageByBoard: byBoard,
+        },
+      })
+
+      const cfg = store.getState().deviceDefinitions.configuration
+      expect(cfg.persistentStorage).toEqual(settings)
+      expect(cfg.persistentStorageByBoard).toEqual(byBoard)
+    })
+
     it('sets pinMapping', () => {
       const store = makeStore()
       const pins: DevicePin[] = [makePin({ pin: 'A0', pinType: 'analogInput', address: '%IW0', alias: 'sensor' })]

@@ -868,6 +868,10 @@ function mergeDeviceConfigWithDefaults(
     runtimeIpAddress: provided.runtimeIpAddress ?? defaults.runtimeIpAddress,
     vendorScreenData,
     vendorScreenDataByBoard,
+    // Preserve project-scoped storage settings when loading device configuration;
+    // otherwise a saved enabled state is lost and the editor shows storage as off.
+    persistentStorage: provided.persistentStorage,
+    persistentStorageByBoard: provided.persistentStorageByBoard,
     // Must merge — otherwise loading a project whose configuration.json
     // predates platformOptions leaves the field undefined in the store, and
     // every selector falling back to `?? {}` returns a fresh literal that
