@@ -21,7 +21,7 @@ import { buildGenericNode } from '../../../../_molecules/graphical-editor/fbd/fb
 import { GraphicalEditorAutocomplete } from '../../autocomplete'
 import { BlockVariant } from '../../types/block'
 import { CustomFbdNodeTypes } from '..'
-import { BasicNodeData } from '../utils'
+import { BasicNodeData, resizeFbdNodeToVariableName } from '../utils'
 import { getFBDPouVariablesRungNodeAndEdges } from '../utils/utils'
 
 /** Minimal shape of an FBD rung this module needs — nodes plus their wiring. */
@@ -164,13 +164,16 @@ const FBDBlockAutoComplete = forwardRef<HTMLDivElement, FBDBlockAutoCompleteProp
       updateNode({
         editorName: pouName,
         nodeId: variableNode.id,
-        node: {
-          ...variableNode,
-          data: {
-            ...variableNode.data,
-            variable: variable,
+        node: resizeFbdNodeToVariableName(
+          {
+            ...variableNode,
+            data: {
+              ...variableNode.data,
+              variable: variable,
+            },
           },
-        },
+          variable.name,
+        ),
       })
     }
 
@@ -238,7 +241,7 @@ const FBDBlockAutoComplete = forwardRef<HTMLDivElement, FBDBlockAutoCompleteProp
       updateNode({
         editorName: pouName,
         nodeId: node.id,
-        node: { ...node, data: { ...node.data, variable: { id: '', name: '' } } },
+        node: resizeFbdNodeToVariableName({ ...node, data: { ...node.data, variable: { id: '', name: '' } } }, ''),
       })
     }
 
@@ -288,13 +291,16 @@ const FBDBlockAutoComplete = forwardRef<HTMLDivElement, FBDBlockAutoCompleteProp
       updateNode({
         editorName: pouName,
         nodeId: node.id,
-        node: {
-          ...node,
-          data: {
-            ...node.data,
-            variable: variable ?? { id: '', name: '' },
+        node: resizeFbdNodeToVariableName(
+          {
+            ...node,
+            data: {
+              ...node.data,
+              variable: variable ?? { id: '', name: '' },
+            },
           },
-        },
+          variable?.name ?? '',
+        ),
       })
     }
 
