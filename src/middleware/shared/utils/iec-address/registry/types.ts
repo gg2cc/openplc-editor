@@ -37,6 +37,8 @@ export interface RegistryChannel {
   /** Fixed hardware address (e.g. an Arduino pin). When set the channel is
    *  RESERVED at this literal address instead of being allocated. */
   pinned?: string
+  /** Keep this explicit user-selected address when legacy allocations are unpinned. */
+  userPinned?: boolean
   /**
    * Stable *semantic* identity that outlives this channel's presence in the
    * registry — e.g. `moduleId:slot:channelName` for a VPP channel. When a

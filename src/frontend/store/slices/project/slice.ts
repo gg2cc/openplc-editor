@@ -33,6 +33,7 @@ import {
   restoreAliasesFromMemory,
   unpinAllocatableChannels,
 } from '../../../../middleware/shared/utils/iec-address/registry'
+import { resolveModbusLocalAddressRange } from '../../../../middleware/shared/utils/modbus/local-address'
 import type {
   AddressProducerCapabilities,
   BoardInfoLike,
@@ -219,13 +220,21 @@ function generateIOPoints(
    * aliases are carried over positionally so resizing / editing a
    * group doesn't wipe the aliases the user attached to each slot. */
   existingPoints: ModbusIOPoint[] = [],
+  localStartAddress?: string,
 ): ModbusIOPoint[] {
   const { type, iecPrefix, isBit } = getFunctionCodeInfo(functionCode)
   const points: ModbusIOPoint[] = []
+  const localAddressRange = localStartAddress
+    ? resolveModbusLocalAddressRange(functionCode, localStartAddress, length)
+    : undefined
+  if (localAddressRange && !localAddressRange.ok) {
+    throw new Error(localAddressRange.message)
+  }
+  const fixedAddresses = localAddressRange?.ok ? localAddressRange.addresses : undefined
 
   for (let i = 0; i < length; i++) {
-    const iecLocation = nextFreeAddress(pool, iecPrefix, isBit, undefined, pending)
-    pending.add(iecLocation)
+    const iecLocation = fixedAddresses ? fixedAddresses[i] : nextFreeAddress(pool, iecPrefix, isBit, undefined, pending)
+    if (!fixedAddresses) pending.add(iecLocation)
     points.push({
       id: `${groupName}_${i}`,
       name: `${groupName}_${i}`,
@@ -433,6 +442,60 @@ function buildModbusProducerPool(
     },
     allocationCapabilities(live),
   )
+}
+
+/** Pool of fixed claims only. Automatically allocated Modbus groups may move
+ *  around a user-selected local range during the central registry recalculation. */
+function buildModbusFixedAddressPool(
+  live: ProjectSliceRoot,
+  excludeGroup?: { deviceName: string; groupId: string },
+): AddressPool {
+  const remoteDevices = live.project.data.remoteDevices?.map((device) => {
+    const config = device.modbusTcpConfig
+    if (!config) return device
+    return {
+      ...device,
+      modbusTcpConfig: {
+        ...config,
+        ioGroups: config.ioGroups.filter(
+          (group) =>
+            !!group.localStartAddress &&
+            !(device.name === excludeGroup?.deviceName && group.id === excludeGroup.groupId),
+        ),
+      },
+    }
+  })
+
+  return buildAddressPool(
+    {
+      pinMapping: {
+        pins: live.deviceDefinitions.pinMapping.pinsByBoard[live.deviceDefinitions.configuration.deviceBoard] ?? [],
+      },
+      vendorIoMapping: { entries: readVppEntries(live) },
+      remoteDevices,
+    },
+    allocationCapabilities(live),
+  )
+}
+
+function validateModbusLocalAddressRange(
+  live: ProjectSliceRoot,
+  addresses: string[] | undefined,
+  excludeGroup?: { deviceName: string; groupId: string },
+): ProjectResponse | undefined {
+  if (!addresses) return undefined
+
+  const pool = buildModbusFixedAddressPool(live, excludeGroup)
+  for (const address of addresses) {
+    const claim = pool.byAddress.get(address)
+    if (!claim) continue
+    const owner =
+      claim.source.kind === 'modbus-tcp-remote'
+        ? `fixed Modbus IO group "${claim.source.ref}"`
+        : `${claim.source.kind} "${claim.source.ref}"`
+    return fail(`Local address ${address} is already used by ${owner}.`, 'Local address conflict')
+  }
+  return undefined
 }
 
 /**
@@ -2511,11 +2574,19 @@ const createProjectSlice: StateCreator<ProjectSliceRoot, [], [], ProjectSlice> =
     },
     getAliasIndex: () => getMemoizedAliasIndex(getState()),
     addIOGroup: (deviceName, group) => {
+      const length = clampIOGroupLength(group.functionCode, group.length)
+      const localAddressRange = resolveModbusLocalAddressRange(group.functionCode, group.localStartAddress, length)
+      if (!localAddressRange.ok) return fail(localAddressRange.message, 'Invalid local start address')
+
+      const live = getState()
+      const conflict = validateModbusLocalAddressRange(live, localAddressRange.addresses)
+      if (conflict) return conflict
+
       // Read producer state from the live store before entering produce
       // so the pool reflects every active source (pin-mapping, VPP,
       // every Modbus / EtherCAT remote device — including this one's
       // existing groups, which must not be reclaimed).
-      const pool = buildModbusProducerPool(getState())
+      const pool = buildModbusProducerPool(live)
 
       setState(
         produce((slice: ProjectSlice) => {
@@ -2526,9 +2597,21 @@ const createProjectSlice: StateCreator<ProjectSliceRoot, [], [], ProjectSlice> =
           // The UI validates and blocks; the store GUARANTEES the invariant,
           // because a zero-point group emits a malformed runtime config
           // (`len` is shipped verbatim by generate-modbus-master-config).
-          const length = clampIOGroupLength(group.functionCode, group.length)
-          const ioPoints = generateIOPoints(group.functionCode, length, group.name, pool, pending)
-          device.modbusTcpConfig.ioGroups.push({ ...group, length, ioPoints })
+          const ioPoints = generateIOPoints(
+            group.functionCode,
+            length,
+            group.name,
+            pool,
+            pending,
+            [],
+            localAddressRange.startAddress,
+          )
+          device.modbusTcpConfig.ioGroups.push({
+            ...group,
+            localStartAddress: localAddressRange.startAddress,
+            length,
+            ioPoints,
+          })
         }),
       )
       // Central recalculation is the authority for final addresses: it
@@ -2539,6 +2622,23 @@ const createProjectSlice: StateCreator<ProjectSliceRoot, [], [], ProjectSlice> =
       return ok()
     },
     updateIOGroup: (deviceName, groupId, updates) => {
+      const live = getState()
+      const currentGroup = live.project.data.remoteDevices
+        ?.find((device) => device.name === deviceName)
+        ?.modbusTcpConfig?.ioGroups.find((group) => group.id === groupId)
+      if (!currentGroup) return ok()
+
+      const functionCode = updates.functionCode ?? currentGroup.functionCode
+      const length = clampIOGroupLength(functionCode, updates.length ?? currentGroup.length)
+      const localStartAddress = Object.prototype.hasOwnProperty.call(updates, 'localStartAddress')
+        ? updates.localStartAddress
+        : currentGroup.localStartAddress
+      const localAddressRange = resolveModbusLocalAddressRange(functionCode, localStartAddress, length)
+      if (!localAddressRange.ok) return fail(localAddressRange.message, 'Invalid local start address')
+
+      const conflict = validateModbusLocalAddressRange(live, localAddressRange.addresses, { deviceName, groupId })
+      if (conflict) return conflict
+
       // Editing a group's length / function code / name must regenerate
       // its I/O points — the previous implementation only `Object.assign`ed
       // the metadata, so the point list (and therefore the effective size
@@ -2549,7 +2649,13 @@ const createProjectSlice: StateCreator<ProjectSliceRoot, [], [], ProjectSlice> =
       // group's current points (all other Modbus groups, pin-mapping, VPP
       // and EtherCAT claims are still honoured). Existing aliases are
       // carried over positionally.
-      const pool = buildModbusProducerPool(getState(), { deviceName, groupId })
+      const pool = buildModbusProducerPool(live, { deviceName, groupId })
+      const normalizedUpdates = {
+        ...updates,
+        functionCode,
+        length,
+        localStartAddress: localAddressRange.startAddress,
+      }
 
       setState(
         produce((slice: ProjectSlice) => {
@@ -2558,14 +2664,22 @@ const createProjectSlice: StateCreator<ProjectSliceRoot, [], [], ProjectSlice> =
           const group = device.modbusTcpConfig.ioGroups.find((g) => g.id === groupId)
           if (!group) return
           const existingPoints = group.ioPoints ?? []
-          Object.assign(group, updates)
+          Object.assign(group, normalizedUpdates)
           // Normalize the PERSISTED field, not just the point count: `length`
           // is what reaches the runtime as `len`. Two wins fall out — switching
           // a group to FC 5/6 forces 1 even if the caller forgets, and a bad
           // length loaded from an old project file self-heals on first edit.
           group.length = clampIOGroupLength(group.functionCode, group.length)
           const pending = new Set<string>()
-          group.ioPoints = generateIOPoints(group.functionCode, group.length, group.name, pool, pending, existingPoints)
+          group.ioPoints = generateIOPoints(
+            group.functionCode,
+            group.length,
+            group.name,
+            pool,
+            pending,
+            existingPoints,
+            group.localStartAddress,
+          )
         }),
       )
       getState().projectActions.recalculateIecAddresses()

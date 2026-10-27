@@ -114,6 +114,7 @@ export interface PoolRemoteDeviceInput {
   modbusTcpConfig?: {
     ioGroups?: Array<{
       id?: string
+      localStartAddress?: string
       ioPoints?: Array<{
         id: string
         iecLocation: string

@@ -77,11 +77,11 @@ const formatOffsetAsHex = (offset: string): string => {
 
 /**
  * Converts a ModbusIOGroup to a ModbusMasterIOPoint for the runtime configuration.
- * Uses the first IO point's IEC location as the starting address for the group.
+ * Uses the configured local start address, or the first IO point when auto-assigned.
  */
 const convertIOGroupToIOPoint = (ioGroup: ModbusIOGroup): ModbusMasterIOPoint => {
   const firstIOPoint = ioGroup.ioPoints?.[0]
-  const iecLocation = firstIOPoint?.iecLocation || '%MW0'
+  const iecLocation = ioGroup.localStartAddress || firstIOPoint?.iecLocation || '%MW0'
 
   return {
     fc: parseInt(ioGroup.functionCode, 10),

@@ -115,6 +115,17 @@ describe('generateModbusMasterConfig', () => {
     expect(ioPoints[0].error_handling).toBe('keep-last-value')
   })
 
+  it('uses the configured local start address for a Modbus IO group', () => {
+    const device = makeTcpDevice()
+    const group = device.modbusTcpConfig!.ioGroups[0]
+    group.localStartAddress = '%IW100'
+    group.ioPoints![0].iecLocation = '%IW0'
+
+    const parsed = JSON.parse(generateModbusMasterConfig([device])!)
+
+    expect(parsed[0].config.io_points[0].iec_location).toBe('%IW100')
+  })
+
   // Regression, openplc-editor#691: the per-group "Keep last value / Set to
   // zero" choice existed only in the UI. It was stored in the project and
   // dropped here, so the runtime never learned about it and always kept the

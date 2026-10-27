@@ -222,6 +222,8 @@ export interface ModbusIOGroup {
   cycleTime: number
   offset: string
   length: number
+  /** Optional fixed start in the local IEC address space; absent means auto-assign. */
+  localStartAddress?: string
   errorHandling: 'keep-last-value' | 'set-to-zero'
   ioPoints?: ModbusIOPoint[]
 }

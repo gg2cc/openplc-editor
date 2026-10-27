@@ -2834,6 +2834,68 @@ describe('createProjectSlice', () => {
       expect(ioGroups[0].ioPoints![1].iecLocation).toBe('%IW1')
     })
 
+    it('keeps an explicitly selected local start address during project-wide recalculation', () => {
+      seedRemoteDevice(store, makeRemoteDevice('Dev1'))
+
+      const result = store
+        .getState()
+        .projectActions.addIOGroup('Dev1', { ...makeIOGroup('fixed', '3', 2), localStartAddress: '%IW100' })
+      expect(result.ok).toBe(true)
+
+      let groups = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups
+      expect(groups[0].localStartAddress).toBe('%IW100')
+      expect(groups[0].ioPoints!.map((point) => point.iecLocation)).toEqual(['%IW100', '%IW101'])
+
+      store.getState().projectActions.addIOGroup('Dev1', makeIOGroup('auto', '3', 1))
+      store.getState().projectActions.recalculateIecAddresses()
+
+      groups = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups
+      expect(groups.find((group) => group.id === 'fixed')!.ioPoints!.map((point) => point.iecLocation)).toEqual([
+        '%IW100',
+        '%IW101',
+      ])
+      expect(groups.find((group) => group.id === 'auto')!.ioPoints![0].iecLocation).toBe('%IW0')
+    })
+
+    it('rejects a fixed local range that overlaps another fixed IO group', () => {
+      seedRemoteDevice(store, makeRemoteDevice('Dev1'))
+      store
+        .getState()
+        .projectActions.addIOGroup('Dev1', { ...makeIOGroup('first', '3', 2), localStartAddress: '%IW10' })
+
+      const result = store
+        .getState()
+        .projectActions.addIOGroup('Dev1', { ...makeIOGroup('overlap', '3', 2), localStartAddress: '%IW11' })
+
+      expect(result.ok).toBe(false)
+      expect(result.title).toBe('Local address conflict')
+      expect(result.message).toContain('%IW11')
+      expect(store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups).toHaveLength(1)
+    })
+
+    it('rejects a fixed local address whose IEC type does not match the function code', () => {
+      seedRemoteDevice(store, makeRemoteDevice('Dev1'))
+
+      const result = store
+        .getState()
+        .projectActions.addIOGroup('Dev1', { ...makeIOGroup('wrong-type', '3', 1), localStartAddress: '%QW0' })
+
+      expect(result.ok).toBe(false)
+      expect(result.title).toBe('Invalid local start address')
+      expect(store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups).toHaveLength(0)
+    })
+
+    it('increments an explicit bit address across byte boundaries', () => {
+      seedRemoteDevice(store, makeRemoteDevice('Dev1'))
+      const result = store
+        .getState()
+        .projectActions.addIOGroup('Dev1', { ...makeIOGroup('bits', '1', 3), localStartAddress: '%IX2.6' })
+
+      expect(result.ok).toBe(true)
+      const points = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups[0].ioPoints!
+      expect(points.map((point) => point.iecLocation)).toEqual(['%IX2.6', '%IX2.7', '%IX3.0'])
+    })
+
     it('generates bit addresses for function code 1 (coils)', () => {
       seedRemoteDevice(store, makeRemoteDevice('Dev1'))
       const group = makeIOGroup('g1', '1', 2)
@@ -3072,6 +3134,25 @@ describe('createProjectSlice', () => {
       const result = store.getState().projectActions.updateIOGroup('Dev1', 'g1', { name: 'renamed' })
       expect(result.ok).toBe(true)
       expect(store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups[0].name).toBe('renamed')
+    })
+
+    it('updates or clears a fixed local start address', () => {
+      seedRemoteDevice(store, makeRemoteDevice('Dev1'))
+      store
+        .getState()
+        .projectActions.addIOGroup('Dev1', { ...makeIOGroup('g1', '3', 2), localStartAddress: '%IW100' })
+
+      const moved = store.getState().projectActions.updateIOGroup('Dev1', 'g1', { localStartAddress: '%IW200' })
+      expect(moved.ok).toBe(true)
+      let group = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups[0]
+      expect(group.localStartAddress).toBe('%IW200')
+      expect(group.ioPoints!.map((point) => point.iecLocation)).toEqual(['%IW200', '%IW201'])
+
+      const cleared = store.getState().projectActions.updateIOGroup('Dev1', 'g1', { localStartAddress: undefined })
+      expect(cleared.ok).toBe(true)
+      group = store.getState().project.data.remoteDevices![0].modbusTcpConfig!.ioGroups[0]
+      expect(group.localStartAddress).toBeUndefined()
+      expect(group.ioPoints!.map((point) => point.iecLocation)).toEqual(['%IW0', '%IW1'])
     })
 
     it('does nothing when group not found', () => {

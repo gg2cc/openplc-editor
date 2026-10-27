@@ -1,6 +1,11 @@
 import { Pencil1Icon, TrashIcon } from '@radix-ui/react-icons'
+import type { ProjectResponse } from '@root/frontend/store/slices/project/types'
 import type { ModbusIOGroup, ModbusIOPoint } from '@root/middleware/shared/ports/types'
 import { useRuntime } from '@root/middleware/shared/providers/platform-context'
+import {
+  getModbusLocalAddressPrefix,
+  resolveModbusLocalAddressRange,
+} from '@root/middleware/shared/utils/modbus/local-address'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -163,8 +168,9 @@ type IOGroupModalProps = {
     cycleTime: number
     offset: string
     length: number
+    localStartAddress?: string
     errorHandling: 'keep-last-value' | 'set-to-zero'
-  }) => void
+  }) => ProjectResponse
   editingGroup?: ModbusIOGroup | null
 }
 
@@ -173,12 +179,18 @@ const IOGroupModal = ({ isOpen, onClose, onSubmit, editingGroup }: IOGroupModalP
   const [functionCode, setFunctionCode] = useState<'1' | '2' | '3' | '4' | '5' | '6' | '15' | '16'>('3')
   const [cycleTime, setCycleTime] = useState('100')
   const [offset, setOffset] = useState('0')
+  const [localStartAddress, setLocalStartAddress] = useState('')
   const [length, setLength] = useState('1')
   const [errorHandling, setErrorHandling] = useState<'keep-last-value' | 'set-to-zero'>('keep-last-value')
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
   // FC 5 (Write Single Coil) and FC 6 (Write Single Register) are single-element operations
   const isSingleElementOperation = isSingleElementFunctionCode(functionCode)
   const lengthValidation = validateIOGroupLength(functionCode, length)
+  const localAddressValidation = resolveModbusLocalAddressRange(functionCode, localStartAddress, 1)
+  const localAddressPrefix = getModbusLocalAddressPrefix(functionCode)
+  const localAddressPlaceholder =
+    localAddressPrefix === '%IX' || localAddressPrefix === '%QX' ? `${localAddressPrefix}0.0` : `${localAddressPrefix}0`
 
   useEffect(() => {
     if (editingGroup) {
@@ -186,6 +198,7 @@ const IOGroupModal = ({ isOpen, onClose, onSubmit, editingGroup }: IOGroupModalP
       setFunctionCode(editingGroup.functionCode)
       setCycleTime(editingGroup.cycleTime.toString())
       setOffset(editingGroup.offset)
+      setLocalStartAddress(editingGroup.localStartAddress ?? '')
       // For single-element operations, length is always 1
       setLength(isSingleElementFunctionCode(editingGroup.functionCode) ? '1' : editingGroup.length.toString())
       setErrorHandling(editingGroup.errorHandling)
@@ -194,9 +207,11 @@ const IOGroupModal = ({ isOpen, onClose, onSubmit, editingGroup }: IOGroupModalP
       setFunctionCode('3')
       setCycleTime('100')
       setOffset('0')
+      setLocalStartAddress('')
       setLength('1')
       setErrorHandling('keep-last-value')
     }
+    setSubmitError(null)
   }, [editingGroup, isOpen])
 
   // When function code changes, enforce length=1 for single-element operations
@@ -207,21 +222,28 @@ const IOGroupModal = ({ isOpen, onClose, onSubmit, editingGroup }: IOGroupModalP
   }, [functionCode, isSingleElementOperation])
 
   const handleSubmit = () => {
-    if (!name.trim() || !lengthValidation.ok) return
-    onSubmit({
+    if (!name.trim() || !lengthValidation.ok || !localAddressValidation.ok) return
+    const result = onSubmit({
       name: name.trim(),
       functionCode,
       cycleTime: parseInt(cycleTime, 10) || 100,
       offset,
       length: lengthValidation.length,
+      localStartAddress: localAddressValidation.startAddress,
       errorHandling,
     })
+    if (!result.ok) {
+      setSubmitError(result.message ?? result.title ?? 'The IO group could not be saved.')
+      return
+    }
     setName('')
     setFunctionCode('3')
     setCycleTime('100')
     setOffset('0')
+    setLocalStartAddress('')
     setLength('1')
     setErrorHandling('keep-last-value')
+    setSubmitError(null)
     onClose()
   }
 
@@ -246,7 +268,13 @@ const IOGroupModal = ({ isOpen, onClose, onSubmit, editingGroup }: IOGroupModalP
           </div>
           <div className='flex items-center gap-2'>
             <Label className='w-28 whitespace-nowrap text-xs text-neutral-950 dark:text-white'>Function Code</Label>
-            <Select value={functionCode} onValueChange={(v) => setFunctionCode(v as typeof functionCode)}>
+            <Select
+              value={functionCode}
+              onValueChange={(v) => {
+                setFunctionCode(v as typeof functionCode)
+                setSubmitError(null)
+              }}
+            >
               <SelectTrigger
                 withIndicator
                 placeholder='Select function code'
@@ -291,12 +319,45 @@ const IOGroupModal = ({ isOpen, onClose, onSubmit, editingGroup }: IOGroupModalP
           </div>
           <div className='flex flex-col gap-1'>
             <div className='flex items-center gap-2'>
+              <Label className='w-28 whitespace-nowrap text-xs text-neutral-950 dark:text-white'>
+                Local Start Address
+              </Label>
+              <InputWithRef
+                value={localStartAddress}
+                onChange={(e) => {
+                  setLocalStartAddress(e.target.value)
+                  setSubmitError(null)
+                }}
+                placeholder={`${localAddressPlaceholder} (auto)`}
+                aria-invalid={!localAddressValidation.ok}
+                className={cn(
+                  inputStyles,
+                  !localAddressValidation.ok && 'border-red-500 focus:border-red-500 dark:border-red-500',
+                )}
+              />
+            </div>
+            <p
+              className={cn(
+                'pl-[7.5rem] font-caption text-xs',
+                localAddressValidation.ok ? 'text-neutral-500 dark:text-neutral-400' : 'text-red-500',
+              )}
+            >
+              {localAddressValidation.ok
+                ? `Leave blank to auto-assign. FC ${functionCode} uses ${localAddressPrefix}.`
+                : localAddressValidation.message}
+            </p>
+          </div>
+          <div className='flex flex-col gap-1'>
+            <div className='flex items-center gap-2'>
               <Label className='w-28 whitespace-nowrap text-xs text-neutral-950 dark:text-white'>Length</Label>
               <InputWithRef
                 type='number'
                 value={length}
                 onChange={(e) => {
-                  if (!isSingleElementOperation) setLength(e.target.value)
+                  if (!isSingleElementOperation) {
+                    setLength(e.target.value)
+                    setSubmitError(null)
+                  }
                 }}
                 placeholder='1'
                 min='1'
@@ -354,6 +415,11 @@ const IOGroupModal = ({ isOpen, onClose, onSubmit, editingGroup }: IOGroupModalP
               </SelectContent>
             </Select>
           </div>
+          {submitError && (
+            <p role='alert' className='pl-[7.5rem] font-caption text-xs text-red-500'>
+              {submitError}
+            </p>
+          )}
         </div>
         <ModalFooter className='flex justify-end gap-2 pt-2'>
           <button
@@ -364,7 +430,7 @@ const IOGroupModal = ({ isOpen, onClose, onSubmit, editingGroup }: IOGroupModalP
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!name.trim() || !lengthValidation.ok}
+            disabled={!name.trim() || !lengthValidation.ok || !localAddressValidation.ok}
             className='rounded-md bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-medium-dark disabled:cursor-not-allowed disabled:opacity-50'
           >
             {editingGroup ? 'Save' : 'Create'}
@@ -757,17 +823,21 @@ const RemoteDeviceEditor = () => {
       cycleTime: number
       offset: string
       length: number
+      localStartAddress?: string
       errorHandling: 'keep-last-value' | 'set-to-zero'
     }) => {
-      if (editingGroup) {
-        projectActions.updateIOGroup(deviceName, editingGroup.id, data)
+      const result = editingGroup
+        ? projectActions.updateIOGroup(deviceName, editingGroup.id, data)
+        : projectActions.addIOGroup(deviceName, {
+            id: uuidv4(),
+            ...data,
+          })
+      if (result.ok) {
+        sharedWorkspaceActions.handleFileAndWorkspaceSavedState(deviceName)
       } else {
-        projectActions.addIOGroup(deviceName, {
-          id: uuidv4(),
-          ...data,
-        })
+        return result
       }
-      sharedWorkspaceActions.handleFileAndWorkspaceSavedState(deviceName)
+      return result
     },
     [deviceName, projectActions, editingGroup, sharedWorkspaceActions],
   )

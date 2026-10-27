@@ -182,6 +182,35 @@ describe('recalculateFromLegacy', () => {
     expect(registry.assignments[channelKey('modbus:d:g', 'p')]).toBe('%IX0.0') // compacts to lowest free
   })
 
+  it('keeps explicitly selected Modbus addresses pinned during recompaction', () => {
+    const inputs: PoolInputs = {
+      remoteDevices: [
+        {
+          name: 'd',
+          modbusTcpConfig: {
+            ioGroups: [
+              {
+                id: 'fixed',
+                localStartAddress: '%IW20',
+                ioPoints: [
+                  { id: 'p0', iecLocation: '%IW20' },
+                  { id: 'p1', iecLocation: '%IW21' },
+                ],
+              },
+              { id: 'automatic', ioPoints: [{ id: 'p2', iecLocation: '%IW22' }] },
+            ],
+          },
+        },
+      ],
+    }
+
+    const { registry } = recalculateFromLegacy(inputs)
+
+    expect(registry.assignments[channelKey('modbus:d:fixed', 'p0')]).toBe('%IW20')
+    expect(registry.assignments[channelKey('modbus:d:fixed', 'p1')]).toBe('%IW21')
+    expect(registry.assignments[channelKey('modbus:d:automatic', 'p2')]).toBe('%IW0')
+  })
+
   it('excludes inactive-kind producers under capability scoping', () => {
     const inputs: PoolInputs = {
       pinMapping: { pins: [{ address: '%QW0' }] },

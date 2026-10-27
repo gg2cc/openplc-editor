@@ -69,6 +69,7 @@ interface RegistryChannel {
   class: { direction: 'I'|'Q'|'M'; size: 'X'|'B'|'W'|'D'|'L' }
   alias?: string                             // unique system-wide; empty = none
   pinned?: string                            // fixed hardware address → reserved, not allocated
+  userPinned?: boolean                       // explicit Modbus local start survives auto-recompaction
 }
 ```
 
@@ -108,6 +109,12 @@ to call on every mutation, on project load, and pre-compile.
 
 Determinism (stable order + stable channel order) guarantees reproducible
 results across sessions, so a re-open never gratuitously renumbers.
+
+Modbus IO groups without a `localStartAddress` remain auto-allocated. An
+explicit `localStartAddress` pins that group's contiguous point range; these
+user-selected addresses survive the legacy-seed unpin step, and automatic
+groups compact around them. Conflicting explicit ranges are rejected before
+the project is mutated.
 
 ### 5.1 Capability scoping vs. unresolved targets
 
@@ -206,7 +213,8 @@ absent, run a **one-shot pure migration**:
    alias are unchanged.
 3. **Unpin.** After adoption, clear the temporary `pinned` seeds on the
    allocatable (non-hardware) channels so subsequent edits can compact
-   gaps. Genuine hardware pins (pin-mapping) stay pinned.
+   gaps. Genuine hardware pins (pin-mapping) and explicit user-selected
+   Modbus starts stay pinned.
 4. **Strip** the now-migrated address/alias fields from producer records
    and write the `addressRegistry` section. Bump a project schema version
    so the migration runs exactly once.

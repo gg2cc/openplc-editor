@@ -55,12 +55,14 @@ function seedChannel(
   address: string | undefined,
   alias: string | undefined,
   memoryKey: string,
+  userPinned = false,
 ): RegistryChannel | null {
   if (!address) return null
   const parsed = parseAddress(address)
   if (!parsed) return null
   const cls: AddressClass = parsed.cls
   const channel: RegistryChannel = { channelId, class: cls, pinned: address, memoryKey }
+  if (userPinned) channel.userPinned = true
   if (alias && alias.length > 0) channel.alias = alias
   return channel
 }
@@ -123,6 +125,7 @@ export function migrateToRegistry(inputs: PoolInputs): IecAddressRegistry {
           point.iecLocation,
           point.alias,
           modbusMemoryKey(deviceName, groupId, point.id),
+          Boolean(group.localStartAddress),
         )
         if (channel) channels.push(channel)
       }
@@ -188,7 +191,7 @@ export function unpinAllocatableChannels(
     return {
       ...consumer,
       channels: consumer.channels.map((channel) => {
-        if (channel.pinned === undefined) return channel
+        if (channel.pinned === undefined || channel.userPinned) return channel
         const { pinned: _pinned, ...rest } = channel
         return rest
       }),
