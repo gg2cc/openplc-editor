@@ -74,6 +74,7 @@ export function generateCanopenConfig(remoteDevices: PLCRemoteDevice[] | undefin
           rpdo: (slave.rpdo ?? []).map((pdo) => ({
             name: pdo.name ?? '',
             index: pdo.index,
+            inhibit_time: pdo.inhibitTime ?? 0,
             mapping: (pdo.mapping ?? []).map((entry) => ({
               index: entry.index,
               sub_index: entry.subIndex ?? 0,

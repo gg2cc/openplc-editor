@@ -15,6 +15,7 @@ import { InputWithRef } from '../../../../../_atoms/input'
 import { Label } from '../../../../../_atoms/label'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '../../../../../_atoms/select'
 import { ToggleSwitch } from '../../../../../_atoms/toggle-switch'
+import { FieldHelpIcon, TooltipProvider } from '../../../../../_atoms/tooltip'
 import {
   formatCanopenHex,
   getCanopenPlcAddressForDataType,
@@ -401,6 +402,38 @@ const CanopenDeviceEditor = () => {
                     className={inputStyles}
                   />
                 </div>
+                {pdoType === 'rpdo' && (
+                  <div className='flex flex-col gap-1'>
+                    <div className='flex items-center gap-1'>
+                      <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Inhibit Time(禁止时间)</Label>
+                      <FieldHelpIcon text='设置该 PDO 的发送抑制时间，用于限制连续发送 PDO 报文的频率；0 表示不启用。单位:0.1ms（注意: 步科伺服 单位为1ms）。' />
+                    </div>
+                    <InputWithRef
+                      type='number'
+                      min={0}
+                      max={0xffff}
+                      step={1}
+                      value={pdo.inhibitTime ?? 0}
+                      onChange={(e) => {
+                        const value = e.target.value
+                        const inhibitTime = value === '' ? 0 : Number(value)
+                        if (!Number.isInteger(inhibitTime) || inhibitTime < 0 || inhibitTime > 0xffff) {
+                          return
+                        }
+                        const nextBuses = updateCanopenPdo(
+                          canopenConfig.buses,
+                          busIndex,
+                          slaveIndex,
+                          pdoType,
+                          pdoIndex,
+                          { inhibitTime },
+                        )
+                        updateCanopenStore({ buses: nextBuses })
+                      }}
+                      className={inputStyles}
+                    />
+                  </div>
+                )}
               </div>
 
               <div className='mt-3 space-y-2'>
@@ -983,15 +1016,16 @@ const CanopenDeviceEditor = () => {
 
   */
   return (
-    <div className='flex h-full w-full flex-col overflow-y-auto bg-neutral-100 p-6 dark:bg-neutral-900'>
-      <div className='mb-6 flex items-center justify-between border-b border-neutral-200 pb-4 dark:border-neutral-800'>
-        <div>
-          <h1 className='font-display text-xl font-bold text-neutral-950 dark:text-white'>{deviceName}</h1>
-          <p className='text-sm text-neutral-600 dark:text-neutral-400'>Protocol: CANopen</p>
+    <TooltipProvider>
+      <div className='flex h-full w-full flex-col overflow-y-auto bg-neutral-100 p-6 dark:bg-neutral-900'>
+        <div className='mb-6 flex items-center justify-between border-b border-neutral-200 pb-4 dark:border-neutral-800'>
+          <div>
+            <h1 className='font-display text-xl font-bold text-neutral-950 dark:text-white'>{deviceName}</h1>
+            <p className='text-sm text-neutral-600 dark:text-neutral-400'>Protocol: CANopen</p>
+          </div>
         </div>
-      </div>
 
-      <div className='flex flex-col gap-6'>
+        <div className='flex flex-col gap-6'>
         <div className='rounded-lg border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-950'>
           <div className='mb-4 flex items-center justify-between'>
             <div>
@@ -1340,8 +1374,9 @@ const CanopenDeviceEditor = () => {
             ))}
           </Tabs.Root>
         </div>
+        </div>
       </div>
-    </div>
+    </TooltipProvider>
   )
 }
 

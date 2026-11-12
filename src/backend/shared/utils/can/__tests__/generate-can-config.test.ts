@@ -186,6 +186,7 @@ describe('generateCanConfig', () => {
                     {
                       name: 'rpdo_1',
                       index: 0x1400,
+                      inhibitTime: 25,
                       mapping: [
                         { index: 0x2100, subIndex: 0, dataType: 'u16', name: 'in_a', plcAddress: '%IW0', direction: 'input' },
                       ],
@@ -215,6 +216,7 @@ describe('generateCanConfig', () => {
     expect(json.buses[0].slaves[0].tpdo[0].name).toBe('tpdo_1')
     expect(json.buses[0].slaves[0].tpdo[0].mapping[0].plc_address).toBe('%QW0')
     expect(json.buses[0].slaves[0].rpdo[0].name).toBe('rpdo_1')
+    expect(json.buses[0].slaves[0].rpdo[0].inhibit_time).toBe(25)
     expect(json.buses[0].slaves[0].rpdo[0].mapping[0].plc_address).toBe('%IW0')
     expect(json.buses[0].slaves[0].sdo[0].default_value).toBe(0)
   })
@@ -410,6 +412,7 @@ describe('generateCanConfig', () => {
     expect(json.buses[0].slaves[0].tpdo[0].mapping[0].plc_address).toBe('%QW0')
     expect(json.buses[0].slaves[0].tpdo[1].mapping[0].plc_address).toBe('%QB2')
     expect(json.buses[0].slaves[0].rpdo[0].mapping[0].plc_address).toBe('%IW10')
+    expect(json.buses[0].slaves[0].rpdo[0].inhibit_time).toBe(0)
     expect(json.buses[0].slaves[0].sdo[0].default_value).toBe(0)
     expect(json.buses[0].slaves[0].sdo[1].default_value).toBe(0)
     expect(json.buses[0].slaves[0].sdo[2].default_value).toBe(0)

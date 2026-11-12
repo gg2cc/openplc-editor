@@ -888,6 +888,7 @@ const CanopenPdoMappingSchema = z.object({
 const CanopenPdoSchema = z.object({
   name: z.string().optional(),
   index: z.number().int().min(0).max(0xffff),
+  inhibitTime: z.number().int().min(0).max(0xffff).optional(),
   mapping: z.array(CanopenPdoMappingSchema).optional(),
 })
 
