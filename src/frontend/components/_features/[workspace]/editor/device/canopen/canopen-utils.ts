@@ -91,7 +91,7 @@ export const makeCanopenPdo = (
   return {
     name: direction === 'output' ? `tpdo_${existing.length + 1}` : `rpdo_${existing.length + 1}`,
     index: nextIndex,
-    ...(direction === 'input' ? { inhibitTime: 0 } : {}),
+    ...(direction === 'input' ? { inhibitTime: 0, eventTime: 0 } : {}),
     mapping: [makeCanopenPdoMapping(direction)],
   }
 }

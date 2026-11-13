@@ -519,6 +519,7 @@ export interface CanopenPdo {
   name?: string
   index: number
   inhibitTime?: number
+  eventTime?: number
   mapping?: CanopenPdoMapping[]
 }
 

@@ -403,36 +403,68 @@ const CanopenDeviceEditor = () => {
                   />
                 </div>
                 {pdoType === 'rpdo' && (
-                  <div className='flex flex-col gap-1'>
-                    <div className='flex items-center gap-1'>
-                      <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Inhibit Time(禁止时间)</Label>
-                      <FieldHelpIcon text='设置该 PDO 的发送抑制时间，用于限制连续发送 PDO 报文的频率；0 表示不启用。单位:0.1ms（注意: 步科伺服 单位为1ms）。' />
+                  <>
+                    <div className='flex flex-col gap-1'>
+                      <div className='flex items-center gap-1'>
+                        <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Inhibit Time(禁止时间)</Label>
+                        <FieldHelpIcon text='设置该 PDO 的发送抑制时间，用于限制连续发送 PDO 报文的频率；0 表示不启用。单位:0.1ms（注意: 步科伺服 单位为1ms）。' />
+                      </div>
+                      <InputWithRef
+                        type='number'
+                        min={0}
+                        max={0xffff}
+                        step={1}
+                        value={pdo.inhibitTime ?? 0}
+                        onChange={(e) => {
+                          const value = e.target.value
+                          const inhibitTime = value === '' ? 0 : Number(value)
+                          if (!Number.isInteger(inhibitTime) || inhibitTime < 0 || inhibitTime > 0xffff) {
+                            return
+                          }
+                          const nextBuses = updateCanopenPdo(
+                            canopenConfig.buses,
+                            busIndex,
+                            slaveIndex,
+                            pdoType,
+                            pdoIndex,
+                            { inhibitTime },
+                          )
+                          updateCanopenStore({ buses: nextBuses })
+                        }}
+                        className={inputStyles}
+                      />
                     </div>
-                    <InputWithRef
-                      type='number'
-                      min={0}
-                      max={0xffff}
-                      step={1}
-                      value={pdo.inhibitTime ?? 0}
-                      onChange={(e) => {
-                        const value = e.target.value
-                        const inhibitTime = value === '' ? 0 : Number(value)
-                        if (!Number.isInteger(inhibitTime) || inhibitTime < 0 || inhibitTime > 0xffff) {
-                          return
-                        }
-                        const nextBuses = updateCanopenPdo(
-                          canopenConfig.buses,
-                          busIndex,
-                          slaveIndex,
-                          pdoType,
-                          pdoIndex,
-                          { inhibitTime },
-                        )
-                        updateCanopenStore({ buses: nextBuses })
-                      }}
-                      className={inputStyles}
-                    />
-                  </div>
+                    <div className='flex flex-col gap-1'>
+                      <div className='flex items-center gap-1'>
+                        <Label className='text-[10px] text-neutral-700 dark:text-neutral-300'>Event Time(事件时间)</Label>
+                        <FieldHelpIcon text='设置该 PDO 的发送事件时间，表示该PDO的最低发送间隔，0 表示不启用。单位:0.1ms（注意: 步科伺服 单位为1ms）。' />
+                      </div>
+                      <InputWithRef
+                        type='number'
+                        min={0}
+                        max={0xffff}
+                        step={1}
+                        value={pdo.eventTime ?? 0}
+                        onChange={(e) => {
+                          const value = e.target.value
+                          const eventTime = value === '' ? 0 : Number(value)
+                          if (!Number.isInteger(eventTime) || eventTime < 0 || eventTime > 0xffff) {
+                            return
+                          }
+                          const nextBuses = updateCanopenPdo(
+                            canopenConfig.buses,
+                            busIndex,
+                            slaveIndex,
+                            pdoType,
+                            pdoIndex,
+                            { eventTime },
+                          )
+                          updateCanopenStore({ buses: nextBuses })
+                        }}
+                        className={inputStyles}
+                      />
+                    </div>
+                  </>
                 )}
               </div>
 
