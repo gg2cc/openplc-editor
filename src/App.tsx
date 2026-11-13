@@ -32,6 +32,7 @@ import { trackAcuExhausted, trackUpgradeCtaClicked } from './frontend/services/a
 import { configureSaveResume } from './frontend/services/resume-save-after-sign-in'
 import { bootStLsp } from './frontend/services/st-lsp/boot'
 import { openPLCStoreBase, useOpenPLCStore } from './frontend/store'
+import { installNumberInputWheelGuard } from './frontend/utils/number-input-wheel'
 import { stlibsToSystemLibraries } from './frontend/utils/stlib-to-system-library'
 import { listenForProviderSignIns } from './middleware/adapters/editor/edge-account-adapter'
 import { getEdgeWebUrl } from './middleware/adapters/editor/system-adapter'
@@ -208,6 +209,8 @@ export default function App() {
       meta: { path },
     },
   } = useOpenPLCStore()
+
+  useEffect(() => installNumberInputWheelGuard(), [])
 
   // Sync store runtime IP to the platform adapter so the runtime port can access it
   const runtimeIpAddress = useOpenPLCStore((state) => state.deviceDefinitions.configuration.runtimeIpAddress || '')
