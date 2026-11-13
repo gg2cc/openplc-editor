@@ -476,6 +476,7 @@ export interface CanTxFrame {
   byteOrder?: 'little' | 'big'
   trigger?: 'cyclic' | 'on_change'
   cycleTimeMs?: number
+  enablePlcAddress?: string
   mappings?: CanMapping[]
 }
 

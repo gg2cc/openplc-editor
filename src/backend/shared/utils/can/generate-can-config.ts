@@ -71,6 +71,7 @@ export function generateCanConfig(remoteDevices: PLCRemoteDevice[] | undefined):
           byte_order: frame.byteOrder ?? 'little',
           trigger: frame.trigger ?? 'cyclic',
           cycle_time_ms: frame.cycleTimeMs ?? 10,
+          enable_plc_address: frame.enablePlcAddress,
           mappings: (frame.mappings ?? []).map((m) => ({
             byte_offset: m.byteOffset ?? 0,
             data_type: m.dataType ?? 'u8',

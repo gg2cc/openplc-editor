@@ -46,6 +46,23 @@ npm run test:watch   # Unit tests in watch mode (no coverage)
 npm run test:e2e     # End-to-end tests (Playwright, builds the app first)
 ```
 
+## CAN TX frame enable
+
+Each TX Frame has an optional **Enable PLC (BOOL)** address, for example `%QX10.0`.
+Declare a located BOOL variable at that address in the PLC program:
+
+```iecst
+VAR
+    canTxEnable AT %QX10.0 : BOOL := FALSE;
+END_VAR
+```
+
+An empty address preserves existing transmission behavior. When configured, `FALSE`
+suppresses transmission and `TRUE` permits the configured cyclic/on-change trigger.
+Re-enabling does not reset the last send time or last transmitted payload: cyclic
+frames wait until due, and on-change frames only send if the payload differs (or
+has never been sent). The enable bit is not part of the CAN payload.
+
 ## Releasing a New Version
 
 The project uses GitHub Actions to automatically build and release new versions for all supported platforms (macOS, Windows, and Linux) in both x64 and ARM64 architectures.

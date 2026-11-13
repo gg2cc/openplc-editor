@@ -855,6 +855,7 @@ const CanTxFrameSchema = z.object({
   byteOrder: z.enum(['little', 'big']).optional(),
   trigger: z.enum(['cyclic', 'on_change']).optional(),
   cycleTimeMs: z.number().optional(),
+  enablePlcAddress: z.string().regex(/^%QX\d+\.[0-7]$/i).optional(),
   mappings: z.array(CanMappingSchema).optional(),
 })
 export type CanTxFrame = z.infer<typeof CanTxFrameSchema>

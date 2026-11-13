@@ -1,4 +1,4 @@
-import type { PLCRemoteDevice } from '../../../types/PLC/open-plc'
+import { PLCRemoteDeviceSchema, type PLCRemoteDevice } from '../../../types/PLC/open-plc'
 import {
   getNextCanopenBusNumber,
   makeCanopenPdo,
@@ -9,6 +9,35 @@ import { generateCanConfig } from '../generate-can-config'
 import { generateCanopenConfig } from '../generate-canopen-config'
 
 describe('generateCanConfig', () => {
+  it('preserves the optional TX enable address through project loading and runtime export', () => {
+    const device = PLCRemoteDeviceSchema.parse({
+      name: 'can0',
+      protocol: 'can',
+      canConfig: {
+        txFrames: [{ canId: '0x123', enablePlcAddress: '%QX10.7' }, { canId: '0x456' }],
+      },
+    })
+    expect(device.canConfig?.txFrames?.[0].enablePlcAddress).toBe('%QX10.7')
+    const output = generateCanConfig([device])
+    expect(output).not.toBeNull()
+    const frames = JSON.parse(output as string).interfaces[0].tx_frames
+    expect(frames[0].enable_plc_address).toBe('%QX10.7')
+    expect(frames[1]).not.toHaveProperty('enable_plc_address')
+  })
+
+  it.each(['%IX0.0', '%QB0', '%QX0.8', '%QX0.', '', '%QX-1.0'])(
+    'rejects invalid TX enable address %s when loading the project',
+    (enablePlcAddress) => {
+      expect(
+        PLCRemoteDeviceSchema.safeParse({
+          name: 'can0',
+          protocol: 'can',
+          canConfig: { txFrames: [{ canId: '0x123', enablePlcAddress }] },
+        }).success,
+      ).toBe(false)
+    },
+  )
+
   it('auto-increments CANopen bus, PDO, and SDO numbering from the highest existing values', () => {
     expect(
       getNextCanopenBusNumber([

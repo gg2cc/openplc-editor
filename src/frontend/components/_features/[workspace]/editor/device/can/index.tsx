@@ -396,10 +396,14 @@ const TxFrameModal = ({ isOpen, onClose, frame, onSave }: TxFrameModalProps) => 
   const [byteOrder, setByteOrder] = useState<'little' | 'big'>('little')
   const [trigger, setTrigger] = useState<'cyclic' | 'on_change'>('cyclic')
   const [cycleTimeMs, setCycleTimeMs] = useState(10)
+  const [enablePlcAddress, setEnablePlcAddress] = useState('')
+  const [enableError, setEnableError] = useState<string | null>(null)
   const [mappings, setMappings] = useState<CanMapping[]>([])
   const [mappingError, setMappingError] = useState<string | null>(null)
 
   useEffect(() => {
+    setEnableError(null)
+    setEnablePlcAddress(frame?.enablePlcAddress ?? '')
     if (frame) {
       setCanId(frame.canId || '0x456')
       setEff(!!frame.eff)
@@ -454,6 +458,12 @@ const TxFrameModal = ({ isOpen, onClose, frame, onSave }: TxFrameModalProps) => 
   }
 
   const handleSave = () => {
+    const enableAddress = enablePlcAddress.trim().toUpperCase()
+    if (enableAddress && !/^%QX\d+\.[0-7]$/.test(enableAddress)) {
+      setEnableError('Enable address must be a BOOL output address such as %QX0.0 (bit 0..7)')
+      return
+    }
+    setEnableError(null)
     const error = validateMappings(mappings, dlc, 'output')
     if (error) {
       setMappingError(error)
@@ -466,6 +476,7 @@ const TxFrameModal = ({ isOpen, onClose, frame, onSave }: TxFrameModalProps) => 
       byteOrder,
       trigger,
       cycleTimeMs,
+      enablePlcAddress: enableAddress || undefined,
       mappings,
     })
     onClose()
@@ -532,6 +543,32 @@ const TxFrameModal = ({ isOpen, onClose, frame, onSave }: TxFrameModalProps) => 
                   className={inputStyles}
                 />
               </div>
+            )}
+          </div>
+
+          <div className='flex flex-col gap-1'>
+            <div className='flex items-center gap-2'>
+              <Label htmlFor='tx-enable-address' className='w-32 text-xs text-neutral-950 dark:text-white'>
+                Enable (BOOL)
+              </Label>
+              <InputWithRef
+                id='tx-enable-address'
+                value={enablePlcAddress}
+                onChange={(e) => {
+                  setEnablePlcAddress(e.target.value)
+                  setEnableError(null)
+                }}
+                placeholder='%QX0.0 (optional)'
+                className={inputStyles}
+              />
+            </div>
+            <p className='text-xs text-neutral-500'>
+              Empty: always enabled. FALSE: no transmission. TRUE: use the configured trigger.
+            </p>
+            {enableError && (
+              <p role='alert' className='text-xs text-red-600'>
+                {enableError}
+              </p>
             )}
           </div>
 
@@ -1004,6 +1041,7 @@ const CanDeviceEditor = () => {
                   <th className='p-2.5'>Frame Type</th>
                   <th className='p-2.5'>DLC</th>
                   <th className='p-2.5'>Trigger</th>
+                  <th className='p-2.5'>Enable (BOOL)</th>
                   <th className='p-2.5'>Mappings (IEC Outputs)</th>
                   <th className='p-2.5 text-right'>Actions</th>
                 </tr>
@@ -1011,7 +1049,7 @@ const CanDeviceEditor = () => {
               <tbody className='divide-y divide-neutral-200 dark:divide-neutral-800'>
                 {(canConfig.txFrames ?? []).length === 0 ? (
                   <tr>
-                    <td colSpan={6} className='p-4 text-center italic text-neutral-500'>
+                    <td colSpan={7} className='p-4 text-center italic text-neutral-500'>
                       No TX frames configured. Click "Add TX Frame" to define CAN transmission rules.
                     </td>
                   </tr>
@@ -1027,6 +1065,9 @@ const CanDeviceEditor = () => {
                       <td className='p-2.5 text-neutral-600 dark:text-neutral-400'>{frame.dlc ?? 8} bytes</td>
                       <td className='p-2.5 text-neutral-600 dark:text-neutral-400'>
                         {frame.trigger === 'on_change' ? 'On Change' : `Cyclic (${frame.cycleTimeMs ?? 10} ms)`}
+                      </td>
+                      <td className='p-2.5 text-neutral-600 dark:text-neutral-400'>
+                        {frame.enablePlcAddress || 'Always enabled'}
                       </td>
                       <td className='p-2.5 text-neutral-600 dark:text-neutral-400'>
                         {(frame.mappings ?? []).length === 0 ? (
